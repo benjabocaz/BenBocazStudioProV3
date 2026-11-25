@@ -122,6 +122,7 @@ void BenBocazStudioProProcessor::prepareToPlay (double sampleRate, int samplesPe
     currentSampleRate = sampleRate;
 
     srcHpf.prepare (sampleRate); srcLpf.prepare (sampleRate); srcMid.prepare (sampleRate);
+    cabVoicing.prepare (sampleRate);
 
     vocalMicModeler.prepare (sampleRate);
     consoleChain.prepare (sampleRate, samplesPerBlock);
@@ -149,36 +150,23 @@ void BenBocazStudioProProcessor::updateFiltersAndChain()
     const int vTgt = static_cast<int> (apvts.getRawParameterValue ("vocalTgtMic")->load());
     vocalMicModeler.updateCurves (vSrc, vTgt);
 
-    const int srcIdx = static_cast<int> (apvts.getRawParameterValue ("source")->load());
-    const int monIdx = static_cast<int> (apvts.getRawParameterValue ("monitorType")->load());
+    const int srcIdx   = static_cast<int> (apvts.getRawParameterValue ("source")->load());
+    const int monIdx   = static_cast<int> (apvts.getRawParameterValue ("monitorType")->load());
+    const float drvAmt = apvts.getRawParameterValue ("consoleDrive")->load();
+
     if (srcIdx == 3) // Monitors (Swedien)
     {
         if (monIdx == 0)      { srcHpf.setHighPass (48.0f);  srcLpf.setLowPass (16500.0f); srcMid.setPeak (2200.0f, 1.5f, 1.0f); }
         else if (monIdx == 1) { srcHpf.setHighPass (115.0f); srcLpf.setLowPass (10200.0f); srcMid.setPeak (1750.0f, 4.0f, 1.1f); }
         else                  { srcHpf.setHighPass (82.0f);  srcLpf.setLowPass (13800.0f); srcMid.setPeak (3100.0f, 3.0f, 1.3f); }
     }
-    else if (srcIdx == 4) // Guitar Cab (Mono)
-    {
-        srcHpf.setHighPass (88.0f, 0.75f);
-        srcLpf.setLowPass (6200.0f, 0.85f);
-        srcMid.setPeak (1450.0f, 2.8f, 1.1f);
-    }
-    else if (srcIdx == 5) // Guitar Cab (Stereo)
-    {
-        srcHpf.setHighPass (76.0f, 0.70f);
-        srcLpf.setLowPass (7400.0f, 0.75f);
-        srcMid.setPeak (2100.0f, 2.2f, 0.95f);
-    }
-    else if (srcIdx == 6) // Bass Amp (Low End)
-    {
-        srcHpf.setHighPass (34.0f, 0.80f);
-        srcLpf.setLowPass (4200.0f, 0.80f);
-        srcMid.setPeak (110.0f, 3.2f, 0.90f);
-    }
     else
     {
+        // Para Guitar Cab (Mono/Stereo) y Bass Amp lo maneja CabinetVoicingStage con mayor detalle
         srcHpf.setBypass(); srcLpf.setBypass(); srcMid.setBypass();
     }
+
+    cabVoicing.configure (srcIdx, drvAmt);
 
     const int eqType      = static_cast<int> (apvts.getRawParameterValue ("eqType")->load());
     const int tubeModel   = static_cast<int> (apvts.getRawParameterValue ("eqTubeModel")->load());
@@ -263,6 +251,7 @@ void BenBocazStudioProProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         srcHpf.processBuffer (buffer);
         srcMid.processBuffer (buffer);
         srcLpf.processBuffer (buffer);
+        cabVoicing.processBuffer (buffer);
 
         MultiMicRoomConfig cfg;
         cfg.modeIdx           = static_cast<int> (apvts.getRawParameterValue ("mode")->load());

@@ -125,7 +125,7 @@ private:
 };
 
 //==============================================================================
-// Etapa de Preamp Analógico con Histéresis y Sag en 4x Oversampling
+// Etapa de Preamp Analógico con Histéresis, Respuesta a Transitorios y Sag
 //==============================================================================
 class AnalogPreampStage
 {
@@ -133,11 +133,12 @@ public:
     void prepare (double oversampledRate)
     {
         sr = oversampledRate > 0.0 ? oversampledRate : 176400.0;
-        lowCoeff  = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 155.0f   / static_cast<float> (sr));
-        midCoeff  = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 1900.0f  / static_cast<float> (sr));
-        highCoeff = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 11500.0f / static_cast<float> (sr));
-        sagCoeff  = 1.0f - std::exp (-1.0f / (0.022f * static_cast<float> (sr)));
-        hystCoeff = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 680.0f   / static_cast<float> (sr));
+        lowCoeff   = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 150.0f   / static_cast<float> (sr));
+        midCoeff   = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 1850.0f  / static_cast<float> (sr));
+        highCoeff  = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 11200.0f / static_cast<float> (sr));
+        sagAtkCoeff = 1.0f - std::exp (-1.0f / (0.004f * static_cast<float> (sr)));
+        sagRelCoeff = 1.0f - std::exp (-1.0f / (0.034f * static_cast<float> (sr)));
+        hystCoeff  = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 660.0f   / static_cast<float> (sr));
         reset();
     }
 
@@ -165,9 +166,12 @@ public:
         const float mids  = midState[c] - lowState[c];
         const float highs = x - highState[c];
 
-        sagEnv[c] += sagCoeff * (std::abs (x) - sagEnv[c]);
+        // Seguimiento asimétrico de envolvente: ataque rápido en transitorios, recuperación orgánica
+        const float absX = std::abs (x);
+        const float sCoeff = (absX > sagEnv[c]) ? sagAtkCoeff : sagRelCoeff;
+        sagEnv[c] += sCoeff * (absX - sagEnv[c]);
 
-        const float hystAmount = (circuit == 0 ? 0.34f : (circuit == 1 ? 0.24f : (circuit == 2 ? 0.28f : 0.10f))) * d;
+        const float hystAmount = (circuit == 0 ? 0.35f : (circuit == 1 ? 0.25f : (circuit == 2 ? 0.29f : 0.10f))) * d;
         fluxState[c] += hystCoeff * (x - fluxState[c]);
         const float dFlux = (x - fluxState[c]) * hystAmount;
 
@@ -175,44 +179,44 @@ public:
 
         if (circuit == 0) // NEVE CLASS-A
         {
-            const float pre = 1.0f + d * 3.1f;
-            const float xFed = (x + lows * (0.45f * d) + dFlux * 1.45f) * pre;
-            const float bias = 0.11f * d + 0.05f * d * sagEnv[c];
+            const float pre = 1.0f + d * 3.05f;
+            const float xFed = (x + lows * (0.42f * d) + dFlux * 1.45f) * pre;
+            const float bias = 0.11f * d + 0.055f * d * sagEnv[c];
             const float shaped = std::tanh (xFed + bias) - std::tanh (bias);
-            const float warm = shaped - highs * (0.14f * d) + fluxState[c] * (0.18f * d);
-            y = warm / (1.0f + d * 1.38f);
+            const float warm = shaped - highs * (0.13f * d) + fluxState[c] * (0.18f * d);
+            y = warm / (1.0f + d * 1.32f);
         }
         else if (circuit == 1) // PULTEC 12AX7
         {
-            const float sag = 1.0f / (1.0f + sagEnv[c] * 0.50f * d);
-            const float pre = (1.0f + d * 2.85f) * sag;
+            const float sag = 1.0f / (1.0f + sagEnv[c] * 0.52f * d);
+            const float pre = (1.0f + d * 2.80f) * sag;
             const float xIn = (x + dFlux * 0.85f) * pre;
             float shaped = 0.0f;
             if (xIn >= 0.0f)
                 shaped = std::tanh (xIn * 1.22f) / 1.22f;
             else
                 shaped = (2.0f / juce::MathConstants<float>::pi) * std::atan (xIn * 0.94f) * 1.16f;
-            y = (shaped + highs * (0.10f * d)) / (1.0f + d * 1.20f);
+            y = (shaped + highs * (0.10f * d)) / (1.0f + d * 1.15f);
         }
         else if (circuit == 2) // API 2520
         {
-            const float pre = 1.0f + d * 3.4f;
-            const float xFed = (x - lows * (0.15f * d) + mids * (0.46f * d) + dFlux * 1.15f) * pre;
+            const float pre = 1.0f + d * 3.35f;
+            const float xFed = (x - lows * (0.14f * d) + mids * (0.48f * d) + dFlux * 1.15f) * pre;
             const float shaped = xFed / std::sqrt (1.0f + xFed * xFed);
-            y = (shaped + lows * (0.14f * d)) / (1.0f + d * 1.45f);
+            y = (shaped + lows * (0.13f * d)) / (1.0f + d * 1.40f);
         }
         else // SSL CLEAN
         {
-            const float pre = 1.0f + d * 1.55f;
+            const float pre = 1.0f + d * 1.50f;
             const float xIn = (x + dFlux * 0.35f) * pre;
             const float shaped = 0.65f * std::tanh (xIn) + 0.35f * (xIn / std::sqrt (1.0f + 0.5f * xIn * xIn));
-            y = (shaped + highs * (0.11f * d)) / (1.0f + d * 0.74f);
+            y = (shaped + highs * (0.11f * d)) / (1.0f + d * 0.72f);
         }
 
         if (speakerBreakup)
         {
-            const float spkIn = y * (1.35f + d * 0.65f) + dFlux * 0.75f;
-            const float spkSat = std::tanh (spkIn + 0.06f * d);
+            const float spkIn = y * (1.32f + d * 0.62f) + dFlux * 0.75f;
+            const float spkSat = std::tanh (spkIn + 0.05f * d);
             y = 0.72f * spkSat + 0.28f * y;
         }
 
@@ -224,7 +228,8 @@ public:
 
 private:
     double sr = 176400.0;
-    float lowCoeff = 0.005f, midCoeff = 0.06f, highCoeff = 0.30f, sagCoeff = 0.0003f, hystCoeff = 0.024f;
+    float lowCoeff = 0.005f, midCoeff = 0.06f, highCoeff = 0.30f;
+    float sagAtkCoeff = 0.0014f, sagRelCoeff = 0.00017f, hystCoeff = 0.024f;
     std::array<float, 2> lowState  { 0.0f, 0.0f };
     std::array<float, 2> midState  { 0.0f, 0.0f };
     std::array<float, 2> highState { 0.0f, 0.0f };
@@ -235,7 +240,7 @@ private:
 };
 
 //==============================================================================
-// Voicing de Gabinete (Guitar Cab Mono, Guitar Cab Stereo Crudo y Bass Amp)
+// Voicing de Gabinete (Guitar Cab Mono, Guitar Cab Stereo y Bass Amp)
 //==============================================================================
 class CabinetVoicingStage
 {

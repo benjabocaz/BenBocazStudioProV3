@@ -31,7 +31,6 @@ void RusticStudioLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y,
     const float cy = bounds.getCentreY();
     const float angle = rotaryStartAngle + sliderPos * (rotaryEndAngle - rotaryStartAngle);
 
-    // 1. Marcas de escala radiales estilo hardware (11 puntos alrededor)
     constexpr int numTicks = 11;
     const float tickR = radius + 4.2f;
     for (int i = 0; i < numTicks; ++i)
@@ -46,21 +45,17 @@ void RusticStudioLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y,
         g.fillEllipse (tx - dotR, ty - dotR, dotR * 2.0f, dotR * 2.0f);
     }
 
-    // 2. Sombra proyectada sobre el chasis
     g.setColour (juce::Colours::black.withAlpha (0.72f));
     g.fillEllipse (cx - radius + 1.5f, cy - radius + 3.8f, radius * 2.0f, radius * 2.0f);
 
-    // 3. Faldón exterior de baquelita negra mate
     juce::ColourGradient skirt (juce::Colour (0xff362f29), cx - radius * 0.55f, cy - radius * 0.55f,
                                 juce::Colour (0xff0f0c0a), cx + radius * 0.65f, cy + radius * 0.65f, true);
     g.setGradientFill (skirt);
     g.fillEllipse (cx - radius, cy - radius, radius * 2.0f, radius * 2.0f);
 
-    // Borde metálico sutil del faldón
     g.setColour (juce::Colour (0xff6e5a42).withAlpha (0.65f));
     g.drawEllipse (cx - radius + 0.5f, cy - radius + 0.5f, radius * 2.0f - 1.0f, radius * 2.0f - 1.0f, 1.0f);
 
-    // 4. Tapa central en bronce/latón cepillado
     const float capR = radius * 0.68f;
     juce::ColourGradient cap (juce::Colour (0xff9e7a47), cx - capR * 0.45f, cy - capR * 0.50f,
                               juce::Colour (0xff2b2014), cx + capR * 0.55f, cy + capR * 0.55f, true);
@@ -70,7 +65,6 @@ void RusticStudioLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y,
     g.setColour (juce::Colour (0xffd9ab62).withAlpha (0.72f));
     g.drawEllipse (cx - capR, cy - capR, capR * 2.0f, capR * 2.0f, 1.05f);
 
-    // 5. Puntero indicador color crema vintage
     juce::Path pointer;
     pointer.addRoundedRectangle (-1.5f, -radius * 0.88f, 3.0f, radius * 0.52f, 1.4f);
     pointer.applyTransform (juce::AffineTransform::rotation (angle).translated (cx, cy));
@@ -199,7 +193,7 @@ void AnalogVuMeter::paint (juce::Graphics& g)
 }
 
 //==============================================================================
-// Studio4MicStagePad (Tope físico frente a la fuente + Prioridad de Selección)
+// Studio4MicStagePad
 //==============================================================================
 Studio4MicStagePad::Studio4MicStagePad (BenBocazStudioProProcessor& proc)
     : processor (proc), apvts (proc.apvts)
@@ -241,9 +235,8 @@ juce::Point<float> Studio4MicStagePad::getStandBasePos (int idx, juce::Rectangle
     const float mx = apvts.getRawParameterValue (pfx + "X")->load();
     const float my = apvts.getRawParameterValue (pfx + "Y")->load();
 
-    // Tope mínimo de los mics estrictamente POR DELANTE de la fuente (srcFloorY = 0.63)
-    const float yTop  = area.getY() + area.getHeight() * 0.70f;
-    const float yBot  = area.getBottom() - 18.0f;
+    const float yTop  = area.getY() + area.getHeight() * 0.74f;
+    const float yBot  = area.getBottom() - 16.0f;
     const float sy    = juce::jmap (my, 0.0f, 1.0f, yTop, yBot);
     const float halfW = juce::jmap (my, 0.0f, 1.0f, area.getWidth() * 0.30f, area.getWidth() * 0.43f);
     const float sx    = area.getCentreX() + mx * halfW;
@@ -274,9 +267,11 @@ juce::Rectangle<float> Studio4MicStagePad::getStandTagRect (int idx, juce::Recta
 
 int Studio4MicStagePad::findTargetStand (juce::Point<float> pt, juce::Rectangle<float> area, float& outMinDist, bool preferSelected) const
 {
-    // 1. Clic directo en la etiqueta flotante de cualquier atril siempre selecciona ese atril
     for (int i = 3; i >= 0; --i)
     {
+        const float g = apvts.getRawParameterValue ("mic" + juce::String (i + 1) + "Gain")->load();
+        if (g <= 0.005f) continue;
+
         if (getStandTagRect (i, area).expanded (3.0f).contains (pt))
         {
             outMinDist = 0.0f;
@@ -294,14 +289,17 @@ int Studio4MicStagePad::findTargetStand (juce::Point<float> pt, juce::Rectangle<
         return std::min ({ pt.getDistanceFrom (base), pt.getDistanceFrom (topPt), pt.getDistanceFrom (midPt) });
     };
 
-    // 2. Si varios atriles están alineados al centro, prioriza el atril actualmente seleccionado
     if (preferSelected)
     {
-        const float selDist = distToStand (selectedStand);
-        if (selDist < 36.0f)
+        const float selGain = apvts.getRawParameterValue ("mic" + juce::String (selectedStand + 1) + "Gain")->load();
+        if (selGain > 0.005f)
         {
-            outMinDist = selDist;
-            return selectedStand;
+            const float selDist = distToStand (selectedStand);
+            if (selDist < 36.0f)
+            {
+                outMinDist = selDist;
+                return selectedStand;
+            }
         }
     }
 
@@ -309,6 +307,9 @@ int Studio4MicStagePad::findTargetStand (juce::Point<float> pt, juce::Rectangle<
     int best = selectedStand;
     for (int i = 0; i < 4; ++i)
     {
+        const float g = apvts.getRawParameterValue ("mic" + juce::String (i + 1) + "Gain")->load();
+        if (g <= 0.005f) continue;
+
         const float d = distToStand (i);
         if (d < outMinDist)
         {
@@ -443,7 +444,6 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     g.saveState();
     g.reduceClipRegion (clip);
 
-    // 1. Fondo fotográfico real (Shangri-La o Canyon)
     const juce::Image& activeRoom = (roomIdx == 1 && canyonImg.isValid()) ? canyonImg
                                                                           : (shangriLaImg.isValid() ? shangriLaImg : canyonImg);
     if (activeRoom.isValid())
@@ -463,9 +463,9 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
 
     const float stageAlpha = roomIsOn ? 1.0f : 0.35f;
 
-    // 2. Fuente Sonora posicionada atrás para que ningún micrófono la traspase
     const float srcFloorX = area.getCentreX();
-    const float srcFloorY = area.getY() + area.getHeight() * 0.63f;
+    const bool isCabinetSource = (sourceIdx >= 4);
+    const float srcFloorY = area.getY() + area.getHeight() * (isCabinetSource ? 0.72f : 0.63f);
     const float roomScale = (roomIdx == 1) ? 0.78f : 0.94f;
 
     g.setColour (juce::Colours::black.withAlpha (0.45f * stageAlpha));
@@ -475,19 +475,20 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     const auto& srcImg = sourceImgs[sIdx];
     if (srcImg.isValid())
     {
-        static constexpr std::array<float, 7> srcHeightRatios { 0.30f, 0.26f, 0.27f, 0.26f, 0.22f, 0.22f, 0.25f };
+        static constexpr std::array<float, 7> srcHeightRatios { 0.30f, 0.26f, 0.27f, 0.26f, 0.21f, 0.21f, 0.24f };
         const float drawH  = area.getHeight() * srcHeightRatios[sIdx] * roomScale;
         const float aspect = static_cast<float> (srcImg.getWidth()) / std::max (1.0f, static_cast<float> (srcImg.getHeight()));
         const float drawW  = drawH * aspect;
+        const float yNudge = isCabinetSource ? 12.0f : 3.0f;
 
-        juce::Rectangle<float> srcDest (srcFloorX - drawW * 0.5f, srcFloorY - drawH + 3.0f, drawW, drawH);
+        juce::Rectangle<float> srcDest (srcFloorX - drawW * 0.5f, srcFloorY - drawH + yNudge, drawW, drawH);
         g.setOpacity (stageAlpha);
         g.drawImage (srcImg, srcDest, juce::RectanglePlacement::stretchToFit);
         g.setOpacity (1.0f);
     }
     else if (sourceIdx >= 4)
     {
-        drawAmpFallback (g, srcFloorX, srcFloorY, sourceIdx, roomScale, stageAlpha);
+        drawAmpFallback (g, srcFloorX, srcFloorY + 10.0f, sourceIdx, roomScale, stageAlpha);
     }
 
     static const std::array<juce::String, 7> srcLabels {
@@ -505,17 +506,20 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     g.setFont (juce::Font (juce::FontOptions (8.2f).withStyle ("Bold")));
     g.drawText (srcLbl, static_cast<int> (srcFloorX - 66), static_cast<int> (area.getY() + 28), 132, 15, juce::Justification::centred);
 
-    // Guía visual de enlace simétrico entre AIR (3) y DECCA (4)
     if (linkAirDecca && roomIsOn)
     {
-        const auto p3 = getStandBasePos (2, area);
-        const auto p4 = getStandBasePos (3, area);
-        g.setColour (juce::Colour (0xff8fc7e8).withAlpha (0.45f));
-        float dash[2] = { 4.0f, 4.0f };
-        g.drawDashedLine (juce::Line<float> (p3, p4), dash, 2, 1.3f);
+        const float g3 = apvts.getRawParameterValue ("mic3Gain")->load();
+        const float g4 = apvts.getRawParameterValue ("mic4Gain")->load();
+        if (g3 > 0.005f && g4 > 0.005f)
+        {
+            const auto p3 = getStandBasePos (2, area);
+            const auto p4 = getStandBasePos (3, area);
+            g.setColour (juce::Colour (0xff8fc7e8).withAlpha (0.45f));
+            float dash[2] = { 4.0f, 4.0f };
+            g.drawDashedLine (juce::Line<float> (p3, p4), dash, 2, 1.3f);
+        }
     }
 
-    // 3. Z-sorting de atrás hacia adelante
     std::array<int, 4> order { 0, 1, 2, 3 };
     std::sort (order.begin(), order.end(), [this] (int a, int b)
     {
@@ -526,10 +530,10 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
 
     static const std::array<juce::String, 4> baseNames { "MAIN", "MID", "AIR", "DECCA" };
     static const std::array<juce::Colour, 4> cols {
-        juce::Colour (0xfff2b24c), // 1: MAIN
-        juce::Colour (0xffe07a52), // 2: MID
-        juce::Colour (0xff8fc7e8), // 3: AIR
-        juce::Colour (0xfff5ebd6)  // 4: DECCA
+        juce::Colour (0xfff2b24c),
+        juce::Colour (0xffe07a52),
+        juce::Colour (0xff8fc7e8),
+        juce::Colour (0xfff5ebd6)
     };
 
     const float roomD = (roomIdx == 0) ? 12.0f : 8.5f;
@@ -537,17 +541,21 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
 
     for (int idx : order)
     {
+        const float gain = apvts.getRawParameterValue ("mic" + juce::String (idx + 1) + "Gain")->load();
+        const bool mutedBySolo = (soloIdx >= 0 && soloIdx != idx);
+
+        if (gain <= 0.005f || mutedBySolo)
+            continue;
+
         const auto base   = getStandBasePos (idx, area);
         const float sc    = getStandScale (idx);
         const float vh    = getStandVisualHeight (idx, sc);
         const float headX = base.x;
         const float headY = base.y - vh * 0.84f;
 
-        const float gain  = apvts.getRawParameterValue ("mic" + juce::String (idx + 1) + "Gain")->load();
         const float my    = apvts.getRawParameterValue ("mic" + juce::String (idx + 1) + "Y")->load();
         const float distM = juce::jmap (my, 0.0f, 1.0f, 0.8f, roomD - 1.5f);
-        const bool mutedBySolo = (soloIdx >= 0 && soloIdx != idx);
-        const float alpha = ((gain > 0.01f && ! mutedBySolo) ? 1.0f : 0.26f) * stageAlpha;
+        const float alpha = stageAlpha;
         const auto col    = cols[static_cast<size_t> (idx)];
         const bool active = (idx == selectedStand || idx == hoveredStand) && roomIsOn;
 
@@ -609,7 +617,6 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
         g.drawText (tag, tagRect.toNearestInt(), juce::Justification::centred);
     }
 
-    // 4. Overlay de Coordenadas del Atril Seleccionado
     if (roomIsOn)
     {
         const juce::String selPfx = "mic" + juce::String (selectedStand + 1);
@@ -734,8 +741,8 @@ void Studio4MicStagePad::mouseUp (const juce::MouseEvent& e)
 
 void Studio4MicStagePad::updateStandFromBasePoint (int idx, juce::Point<float> targetBase, juce::Rectangle<float> area)
 {
-    const float yTop = area.getY() + area.getHeight() * 0.70f;
-    const float yBot = area.getBottom() - 18.0f;
+    const float yTop = area.getY() + area.getHeight() * 0.74f;
+    const float yBot = area.getBottom() - 16.0f;
 
     const float normY = juce::jlimit (0.0f, 1.0f, (targetBase.y - yTop) / std::max (1.0f, yBot - yTop));
     const float halfW = juce::jmap (normY, 0.0f, 1.0f, area.getWidth() * 0.30f, area.getWidth() * 0.43f);
@@ -773,25 +780,23 @@ BenBocazStudioProEditor::BenBocazStudioProEditor (BenBocazStudioProProcessor& p)
 
     roomPad.onSelectedStandChanged = [this] (int selIdx) { updateSelectedStandButtonsUI (selIdx); };
 
-    // Barra de Presets limpia
     presetLbl.setText ("PRESETS", juce::dontSendNotification);
     presetLbl.setColour (juce::Label::textColourId, juce::Colour (0xffe5a94c));
     presetLbl.setFont (juce::Font (juce::FontOptions (9.6f).withStyle ("Bold")));
     addAndMakeVisible (presetLbl);
 
     presetBox.addItemList ({
-        "01. Clean Main Centered (Simple)",
+        "01. Simple 2-Mic Clean (Default)",
         "02. Vocal C-800G Warm & Air",
         "03. Shangri-La Live Drums",
         "04. Canyon Guitar Stereo",
         "05. Bass Amp Low Weight",
         "06. Swedien NS-10 Re-Mic"
     }, 1);
-    presetBox.setSelectedItemIndex (1, juce::dontSendNotification);
+    presetBox.setSelectedItemIndex (0, juce::dontSendNotification);
     presetBox.onChange = [this] { applyFactoryPreset (presetBox.getSelectedItemIndex()); };
     addAndMakeVisible (presetBox);
 
-    // Controles de precisión, Tips y Vista Expandida
     snapCenterBtn.setToggleState (true, juce::dontSendNotification);
     snapCenterBtn.onClick = [this] { roomPad.setSnapToCenter (snapCenterBtn.getToggleState()); };
     addAndMakeVisible (snapCenterBtn);
@@ -999,20 +1004,21 @@ void BenBocazStudioProEditor::applyFactoryPreset (int idx)
             param->setValueNotifyingHost (param->convertTo0to1 (plainVal));
     };
 
-    if (idx == 0) // 01. Clean Main Centered (Simple)
+    if (idx == 0) // 01. Simple 2-Mic Clean (Default)
     {
-        setParam ("mode", 1); setParam ("roomOn", 1); setParam ("mainStereo", 0);
+        setParam ("mode", 1); setParam ("source", 0); setParam ("roomOn", 1); setParam ("mainStereo", 0);
         setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.16f); setParam ("mic1Gain", 1.0f);
-        setParam ("mic2Gain", 0.0f); setParam ("mic3Gain", 0.0f); setParam ("mic4Gain", 0.0f);
-        setParam ("chamberMix", 0.12f); setParam ("eqLow", 0.0f); setParam ("eqMid", 0.0f); setParam ("eqHigh", 0.0f);
+        setParam ("mic2X", -0.38f); setParam ("mic2Y", 0.48f); setParam ("mic2Gain", 0.25f);
+        setParam ("mic3Gain", 0.0f); setParam ("mic4Gain", 0.0f);
+        setParam ("chamberMix", 0.16f); setParam ("eqLow", 0.0f); setParam ("eqMid", 0.0f); setParam ("eqHigh", 0.0f);
         setParam ("parCompOn", 0);
     }
-    else if (idx == 1) // 02. Vocal C-800G Warm & Air
+    else if (idx == 1) // 02. Vocal C-800G Warm & Air (3 mics)
     {
         setParam ("mode", 1); setParam ("source", 0); setParam ("room", 0); setParam ("walls", 1);
         setParam ("vocalModOn", 1); setParam ("vocalSrcMic", 2); setParam ("vocalTgtMic", 0);
         setParam ("mainStereo", 0); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.16f);
-        setParam ("mic1Gain", 1.05f); setParam ("mic2Gain", 0.25f); setParam ("mic3Gain", 0.35f); setParam ("mic4Gain", 0.15f);
+        setParam ("mic1Gain", 1.05f); setParam ("mic2Gain", 0.25f); setParam ("mic3Gain", 0.30f); setParam ("mic4Gain", 0.0f);
         setParam ("eqType", 1); setParam ("eqHighFreq", 2); setParam ("eqHigh", 2.0f);
         setParam ("compType", 1); setParam ("compMix", 0.85f); setParam ("chamberMix", 0.22f);
     }
@@ -1035,7 +1041,7 @@ void BenBocazStudioProEditor::applyFactoryPreset (int idx)
     {
         setParam ("mode", 1); setParam ("source", 6); setParam ("room", 1); setParam ("walls", 0);
         setParam ("mainStereo", 0); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.14f);
-        setParam ("mic1Gain", 1.10f); setParam ("mic2Gain", 0.32f); setParam ("mic3Gain", 0.12f); setParam ("mic4Gain", 0.22f);
+        setParam ("mic1Gain", 1.10f); setParam ("mic2Gain", 0.32f); setParam ("mic3Gain", 0.0f); setParam ("mic4Gain", 0.22f);
         setParam ("eqType", 0); setParam ("eqLowFreq", 1); setParam ("eqLow", 2.5f);
         setParam ("compType", 0); setParam ("compScFilter", 1);
     }
@@ -1043,7 +1049,7 @@ void BenBocazStudioProEditor::applyFactoryPreset (int idx)
     {
         setParam ("mode", 1); setParam ("source", 3); setParam ("monitorType", 1); setParam ("room", 0);
         setParam ("mainStereo", 1); setParam ("mic1Gain", 0.85f); setParam ("mic2Gain", 0.55f);
-        setParam ("mic3Gain", 0.45f); setParam ("mic4Gain", 0.40f); setParam ("consoleDrive", 0.32f);
+        setParam ("mic3Gain", 0.45f); setParam ("mic4Gain", 0.0f); setParam ("consoleDrive", 0.32f);
     }
 }
 
@@ -1227,7 +1233,6 @@ void BenBocazStudioProEditor::paint (juce::Graphics& g)
     }
     else
     {
-        // Paneles superiores ampliados (+46 px) y racks inferiores compactados
         drawPanel ({ 24,   108, 256, 450 }, "VOCAL MIC MOD & SOURCE");
         drawPanel ({ 292,  108, 656, 450 }, "LIVE ROOM 3D STAGE");
         drawPanel ({ 960,  108, 276, 450 }, "ECHO CHAMBERS & IR");
@@ -1244,7 +1249,6 @@ void BenBocazStudioProEditor::paint (juce::Graphics& g)
 
 void BenBocazStudioProEditor::resized()
 {
-    // Header
     modeLbl.setBounds       (390, 10, 96, 13);  modeBox.setBounds       (390, 25, 100, 25);
     chainLbl.setBounds      (500, 10, 165, 13); chainBox.setBounds      (500, 25, 176, 25);
     phaseAlignBtn.setBounds (688, 9,  112, 23);
@@ -1252,7 +1256,6 @@ void BenBocazStudioProEditor::resized()
     vuMeter.setBounds       (812, 6,  312, 56);
     vuModeBtn.setBounds     (1134, 20, 94, 26);
 
-    // Barra superior limpia (sin ROOM GLUE ni DE-MUD)
     presetLbl.setBounds     (32,  73, 58,  22);
     presetBox.setBounds     (92,  73, 250, 22);
     snapCenterBtn.setBounds (362, 73, 106, 22);
@@ -1297,7 +1300,6 @@ void BenBocazStudioProEditor::resized()
         return;
     }
 
-    // Panel Izquierdo: Vocal Mic Mod + Room Source + Tube Circuit & Drive
     vocalModBtn.setBounds    (36,  132, 232, 22);
     vocalSrcLbl.setBounds    (36,  158, 112, 12); vocalSrcBox.setBounds    (36,  171, 112, 22);
     vocalTgtLbl.setBounds    (156, 158, 112, 12); vocalTgtBox.setBounds    (156, 171, 112, 22);
@@ -1309,11 +1311,9 @@ void BenBocazStudioProEditor::resized()
     roomLbl.setBounds     (36,  337, 112, 12); roomBox.setBounds     (36,  350, 112, 22);
     wallsLbl.setBounds    (156, 337, 112, 12); wallsBox.setBounds    (156, 350, 112, 22);
 
-    // TUBE CIRCUIT justo arriba de TUBE / TAPE DRIVE
     eqTubeLbl.setBounds   (54,  402, 196, 12); eqTubeBox.setBounds   (54,  415, 196, 22);
     driveLbl.setBounds    (85,  444, 134, 12); driveSlider.setBounds (114, 458, 76,  86);
 
-    // Panel Central: Escenario 3D más grande (+50 px) + Selección directa y Solo por atril
     mainStereoBtn.setBounds (728, 113, 114, 20);
     roomOnBtn.setBounds     (850, 113, 86,  20);
     roomPad.setBounds       (304, 136, 632, 326);
@@ -1325,7 +1325,6 @@ void BenBocazStudioProEditor::resized()
     pairWidthLbl.setBounds  (728, 469, 98, 13); pairWidthSlider.setBounds  (742, 484, 68, 66);
     deccaWidthLbl.setBounds (834, 469, 98, 13); deccaWidthSlider.setBounds (848, 484, 68, 66);
 
-    // Panel Derecho: Cámaras + IR
     chamberOnBtn.setBounds (1154, 113, 70, 20);
     chamberLbl.setBounds   (972, 140, 160, 13); chamberBox.setBounds (972, 154, 252, 24);
     loadIRBtn.setBounds    (972, 186, 114, 24); irNameLbl.setBounds  (1092, 186, 132, 24);
@@ -1335,7 +1334,6 @@ void BenBocazStudioProEditor::resized()
     chPreLbl.setBounds   (990,  384, 96, 13); chPreSlider.setBounds   (998,  399, 80, 88);
     chWidthLbl.setBounds (1110, 384, 96, 13); chWidthSlider.setBounds (1118, 399, 80, 88);
 
-    // Panel Inferior Izquierdo: Analog Console EQ (compacto y despejado)
     eqOnBtn.setBounds       (516, 573, 72, 21);
     eqTypeLbl.setBounds     (38,  596, 80, 12); eqTypeBox.setBounds (124, 594, 210, 21);
 
@@ -1344,7 +1342,6 @@ void BenBocazStudioProEditor::resized()
     eqMidLbl.setBounds  (320, 628, 86, 13); eqMidSlider.setBounds  (326, 642, 74, 82); eqMidFreqBox.setBounds  (323, 738, 80, 20);
     eqHighLbl.setBounds (456, 628, 86, 13); eqHighSlider.setBounds (462, 642, 74, 82); eqHighFreqBox.setBounds (459, 738, 80, 20);
 
-    // Panel Inferior Centro: Outboard Compressor + Compresor Paralelo Dedicado (compacto)
     compOnBtn.setBounds     (998, 573, 78, 21);
     compLbl.setBounds       (626, 595, 140, 12); compBox.setBounds       (626, 608, 152, 21);
     compScLinkBtn.setBounds (786, 595, 114, 19);
@@ -1357,6 +1354,5 @@ void BenBocazStudioProEditor::resized()
     parAmtLbl.setBounds     (958, 624, 88,  12); parAmtSlider.setBounds (966, 637, 72, 78);
     parRouteLbl.setBounds   (934, 722, 136, 12); parRouteBox.setBounds  (934, 735, 136, 21);
 
-    // Panel Inferior Derecho: Master Output
     outGainLbl.setBounds    (1124, 636, 88, 13); outGainSlider.setBounds (1130, 650, 76, 94);
 }

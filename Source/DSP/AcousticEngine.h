@@ -158,6 +158,10 @@ public:
         airPhaseHpf.prepare (sr);   airPhaseHpf.setHighPass (165.0f, 0.7071f);
         deccaPhaseHpf.prepare (sr); deccaPhaseHpf.setHighPass (90.0f, 0.7071f);
 
+        // Control suave de acumulación de graves/medios-graves en la sala y cámara
+        roomBoomDip.prepare (sr);   roomBoomDip.setPeak (240.0f, -2.4f, 1.05f);
+        roomSubHpf.prepare (sr);    roomSubHpf.setHighPass (48.0f, 0.7071f);
+
         deMudHpf.prepare (sr);      deMudHpf.setHighPass (165.0f, 0.7071f);
         deMudDip.prepare (sr);      deMudDip.setPeak (275.0f, -4.5f, 1.1f);
 
@@ -178,8 +182,10 @@ public:
         erWritePos = 0;
         roomFdn.reset(); chamberFdn.reset(); roomAmbComp.reset();
         midPhaseHpf.reset(); airPhaseHpf.reset(); deccaPhaseHpf.reset();
+        roomBoomDip.reset(); roomSubHpf.reset();
         deMudHpf.reset(); deMudDip.reset();
         preDelay.reset(); customConvolver.reset();
+        airLpL = airLpR = 0.0f;
     }
 
     void loadCustomImpulseResponse (const juce::File& file)
@@ -213,7 +219,7 @@ public:
         const float roomW = (cfg.roomIdx == 0) ? 16.0f : 10.5f;
         const float roomD = (cfg.roomIdx == 0) ? 12.0f : 8.5f;
         const float speed = 343.0f;
-        const float wallRef = cfg.wallsLive ? 0.68f : 0.42f;
+        const float wallRef = cfg.wallsLive ? 0.72f : 0.44f;
 
         std::array<float, 4> distMeters {};
         std::array<float, 4> panL {}, panR {};
@@ -235,18 +241,22 @@ public:
             panR[s] = std::sin (ang) * 1.414f;
 
             // Retardo físico real por distancia entre atriles:
-            // - Con Phase Safe OFF: retardo directo según distancia respecto al atril 1.
-            // - Con Phase Safe ON: mantiene retardo real de distancia pero más contenido para evitar comb agresivo.
+            // - Con Phase Safe OFF: retardo directo por distancia respecto al atril 1.
+            // - Con Phase Safe ON: mantiene retardo real por distancia pero suavizado para evitar comb agresivo.
             const float relDist = std::max (0.0f, distMeters[s] - distMeters[0]);
             const float rawDelaySec = relDist / speed;
             const float delaySec = cfg.phaseSafe ? (rawDelaySec * 0.65f) : rawDelaySec;
             delaySamples[s] = delaySec * static_cast<float> (sr);
         }
 
-        const size_t erNear = static_cast<size_t> (0.0145f * sr);
-        const size_t erFar  = static_cast<size_t> (0.0195f * sr);
-        const size_t erCeil = static_cast<size_t> (0.0245f * sr);
-        const size_t erBack = static_cast<size_t> (0.0320f * sr);
+        // Reflexiones tempranas asimétricas y escalonadas (pared izquierda/derecha, piso/techo y pared trasera)
+        const float roomScaleEr = (cfg.roomIdx == 0) ? 1.18f : 0.82f;
+        const size_t erSideL = static_cast<size_t> (0.0112f * roomScaleEr * sr);
+        const size_t erSideR = static_cast<size_t> (0.0158f * roomScaleEr * sr);
+        const size_t erFloor = static_cast<size_t> (0.0194f * roomScaleEr * sr);
+        const size_t erCeil  = static_cast<size_t> (0.0242f * roomScaleEr * sr);
+        const size_t erBackL = static_cast<size_t> (0.0315f * roomScaleEr * sr);
+        const size_t erBackR = static_cast<size_t> (0.0368f * roomScaleEr * sr);
 
         const float deccaSideOffset = juce::jmap (cfg.deccaWidth, 0.2f, 1.5f, 0.0008f, 0.0085f) * static_cast<float> (sr);
         const float pairW = std::clamp (cfg.pairSpread, 0.0f, 1.5f);
@@ -277,36 +287,45 @@ public:
             erBufL[erWritePos] = srcL;
             erBufR[erWritePos] = srcR;
 
-            const float erL = (erBufL[(erWritePos - erNear) & erMask] * 0.42f
-                             + erBufR[(erWritePos - erFar)  & erMask] * 0.32f
-                             + erBufL[(erWritePos - erCeil) & erMask] * 0.30f
-                             + erBufR[(erWritePos - erBack) & erMask] * 0.24f) * wallRef;
+            const float erL = (erBufL[(erWritePos - erSideL) & erMask] * 0.44f
+                             + erBufR[(erWritePos - erSideR) & erMask] * 0.34f
+                             + erBufL[(erWritePos - erFloor) & erMask] * 0.28f
+                             + erBufR[(erWritePos - erCeil)  & erMask] * 0.24f
+                             + erBufL[(erWritePos - erBackL) & erMask] * 0.22f
+                             + erBufR[(erWritePos - erBackR) & erMask] * 0.16f) * wallRef;
 
-            const float erR = (erBufR[(erWritePos - erNear) & erMask] * 0.42f
-                             + erBufL[(erWritePos - erFar)  & erMask] * 0.32f
-                             + erBufR[(erWritePos - erCeil) & erMask] * 0.30f
-                             + erBufL[(erWritePos - erBack) & erMask] * 0.24f) * wallRef;
+            const float erR = (erBufR[(erWritePos - erSideR) & erMask] * 0.44f
+                             + erBufL[(erWritePos - erSideL) & erMask] * 0.34f
+                             + erBufR[(erWritePos - erFloor) & erMask] * 0.28f
+                             + erBufL[(erWritePos - erCeil)  & erMask] * 0.24f
+                             + erBufR[(erWritePos - erBackR) & erMask] * 0.22f
+                             + erBufL[(erWritePos - erBackL) & erMask] * 0.16f) * wallRef;
 
             float fdnL = 0.0f, fdnR = 0.0f;
-            roomFdn.processStereo (srcL + erL * 0.35f, srcR + erR * 0.35f, fdnL, fdnR);
+            roomFdn.processStereo (srcL + erL * 0.38f, srcR + erR * 0.38f, fdnL, fdnR);
 
             float mainL = 0.0f, mainR = 0.0f;
             float ambL  = 0.0f, ambR  = 0.0f;
 
-            // ATRIL 1: MAIN (refleja distancia y retardo real al alejarse de la fuente)
+            // ATRIL 1: MAIN (retardo físico por distancia + absorción de aire al alejarse)
             if (activeGain[0] > 0.001f)
             {
                 const float g = activeGain[0];
                 const float yDist = cfg.micY[0];
-                const float dirW = juce::jmap (yDist, 0.0f, 1.0f, 0.94f, 0.35f);
-                const float ambW = juce::jmap (yDist, 0.0f, 1.0f, 0.14f, 0.65f);
+                const float dirW = juce::jmap (yDist, 0.0f, 1.0f, 0.94f, 0.32f);
+                const float ambW = juce::jmap (yDist, 0.0f, 1.0f, 0.14f, 0.68f);
 
                 const float mainDelay = (distMeters[0] / speed) * static_cast<float> (sr);
                 float dirL = readFrac (erBufL, mainDelay);
                 float dirR = readFrac (erBufR, mainDelay);
 
-                float sL = dirL * dirW + (erL * 0.7f + fdnL * 0.5f) * ambW;
-                float sR = dirR * dirW + (erR * 0.7f + fdnR * 0.5f) * ambW;
+                // Absorción sutil de aire según distancia
+                const float airAbsorb = juce::jmap (yDist, 0.0f, 1.0f, 0.06f, 0.34f);
+                dirL = dirL * (1.0f - airAbsorb * 0.35f);
+                dirR = dirR * (1.0f - airAbsorb * 0.35f);
+
+                float sL = dirL * dirW + (erL * 0.72f + fdnL * 0.52f) * ambW;
+                float sR = dirR * dirW + (erR * 0.72f + fdnR * 0.52f) * ambW;
 
                 if (! cfg.mainStereo)
                     sL = sR = 0.5f * (sL + sR);
@@ -335,14 +354,14 @@ public:
                 ambR += (mid - side) * panR[1] * g;
             }
 
-            // ATRIL 3: AIR
+            // ATRIL 3: AIR (absorción de aire natural más marcada a mayor distancia)
             if (activeGain[2] > 0.001f)
             {
                 const float g = activeGain[2] * 0.82f;
                 float aL = readFrac (erBufL, delaySamples[2]) * 0.25f + erL * 0.55f + fdnL * 1.15f;
                 float aR = readFrac (erBufR, delaySamples[2]) * 0.25f + erR * 0.55f + fdnR * 1.15f;
 
-                const float airCoeff = juce::jmap (cfg.micY[2], 0.0f, 1.0f, 0.12f, 0.45f);
+                const float airCoeff = juce::jmap (cfg.micY[2], 0.0f, 1.0f, 0.16f, 0.52f);
                 airLpL = aL * (1.0f - airCoeff) + airLpL * airCoeff;
                 airLpR = aR * (1.0f - airCoeff) + airLpR * airCoeff;
                 aL = airLpL; aR = airLpR;
@@ -383,6 +402,10 @@ public:
                 ambR += (mid - side) * panR[3] * g;
             }
 
+            // Limpieza suave de subgraves y medios-graves en el ambiente de sala
+            ambL = roomBoomDip.processSample (0, roomSubHpf.processSample (0, ambL));
+            ambR = roomBoomDip.processSample (1, roomSubHpf.processSample (1, ambR));
+
             if (cfg.deMudOn)
             {
                 ambL = deMudDip.processSample (0, deMudHpf.processSample (0, ambL));
@@ -397,8 +420,9 @@ public:
 
             if (cfg.modeIdx == 0)
             {
-                left[i]  = dryL + mixL * 0.55f * polaritySign;
-                right[i] = dryR + mixR * 0.55f * polaritySign;
+                // Compensación sutil de nivel al sumar ambiente de sala en modo Reverb
+                left[i]  = (dryL + mixL * 0.55f * polaritySign) * 0.92f;
+                right[i] = (dryR + mixR * 0.55f * polaritySign) * 0.92f;
             }
             else
             {
@@ -478,8 +502,9 @@ public:
 
         for (int i = 0; i < numSamples; ++i)
         {
-            float cL = sL[i];
-            float cR = sR[i];
+            float cL = roomBoomDip.processSample (0, roomSubHpf.processSample (0, sL[i]));
+            float cR = roomBoomDip.processSample (1, roomSubHpf.processSample (1, sR[i]));
+
             if (deMudOn)
             {
                 cL = deMudDip.processSample (0, deMudHpf.processSample (0, cL));
@@ -512,6 +537,7 @@ private:
     float airLpL = 0.0f, airLpR = 0.0f;
 
     StereoBiquad midPhaseHpf, airPhaseHpf, deccaPhaseHpf;
+    StereoBiquad roomBoomDip, roomSubHpf;
     StereoBiquad deMudHpf, deMudDip;
     HadamardFDN roomFdn, chamberFdn;
     VintageCompressor roomAmbComp;

@@ -37,30 +37,31 @@ public:
     juce::String getLoadedIRName() const { return acousticEngine.getLoadedIRName(); }
 
     float getOutputVuDb() const { return outputVuDb.load(); }
-    float getCompGrDb() const { return compressor.getGainReductionDb(); }
+    float getCompGrDb() const { return consoleChain.mainComp.getGainReductionDb(); }
+
+    void setSoloStand (int idx) { soloStandIndex.store (idx); }
+    int getSoloStand() const { return soloStandIndex.load(); }
 
     juce::AudioProcessorValueTreeState apvts;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-    void updateFilters();
-    void processConsoleEQ (juce::AudioBuffer<float>& buffer);
-    void processCompressorStage (juce::AudioBuffer<float>& buffer);
+    void updateFiltersAndChain();
+    void processConsoleStage (juce::AudioBuffer<float>& buffer, bool speakerBreakup);
     void processChamberStage (juce::AudioBuffer<float>& buffer);
 
     double currentSampleRate = 44100.0;
 
     StereoBiquad srcHpf, srcLpf, srcMid;
-    StereoBiquad eqHpf, eqLow, eqPultecDip, eqMid, eqHigh;
 
     VocalMicModeler vocalMicModeler;
-    OversampledAnalogStage analogStage;
-    VintageCompressor compressor;
+    OversampledConsoleChain consoleChain;
     AcousticEngine acousticEngine;
 
     juce::AudioBuffer<float> chamberScratch;
     std::atomic<float> outputVuDb { -60.0f };
+    std::atomic<int> soloStandIndex { -1 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BenBocazStudioProProcessor)
 };

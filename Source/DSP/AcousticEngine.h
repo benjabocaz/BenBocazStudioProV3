@@ -8,9 +8,6 @@
 #include <algorithm>
 #include <atomic>
 
-//==============================================================================
-// Filtro All-Pass de dispersión (evita choques de fase en micrófonos de ambiente)
-//==============================================================================
 class SimpleAllPass
 {
 public:
@@ -40,9 +37,6 @@ private:
     size_t mask = 0, delay = 1, pos = 0;
 };
 
-//==============================================================================
-// Red de Retardos Realimentados Hadamard de 8 Canales (Simétrica en L y R)
-//==============================================================================
 class HadamardFDN
 {
 public:
@@ -147,29 +141,29 @@ private:
     std::array<float, NumLines> baseDelaySamples {}, lineGain {}, lpState {}, dcIn {}, dcOut {}, lfoPhase {};
 };
 
-//==============================================================================
-// Configuración de los 4 Atriles de Micrófono y Apertura Estéreo
-//==============================================================================
 struct MultiMicRoomConfig
 {
     int modeIdx = 1;       // 0: Reverb, 1: Re-Mic
-    int sourceIdx = 0;     // 0: Vocals, 1: Drums, 2: Ensemble, 3: Monitors
+    int sourceIdx = 0;     // 0: Vocals, 1: Drums, 2: Ensemble, 3: Monitors, 4: Guitar Mono, 5: Guitar Stereo, 6: Bass Amp
     int roomIdx = 0;       // 0: Studio A (Shangri-La), 1: Studio B (Canyon)
     int wallsLive = 1;     // 0: Tight, 1: Live
     bool phaseSafe = true;
     bool phaseInvert = false;
     bool mainStereo = false;
+    bool deMudOn = false;
+    int soloStandIdx = -1; // -1: Ninguno, 0..3: Solo atril específico
     float pairSpread = 1.0f;
     float deccaWidth = 1.0f;
+
+    // Compresión paralela derivada solo a los micrófonos de ambiente (MID, AIR, DECCA)
+    bool roomParallelCrush = false;
+    float roomParallelAmt  = 0.45f;
 
     std::array<float, 4> micX    { 0.0f, -0.42f, 0.42f, 0.05f };
     std::array<float, 4> micY    { 0.18f, 0.54f, 0.76f, 0.86f };
     std::array<float, 4> micGain { 1.0f,  0.45f, 0.35f, 0.30f };
 };
 
-//==============================================================================
-// Motor Acústico Multi-Atril + Apertura Estéreo Real + Protección de Fase
-//==============================================================================
 class AcousticEngine
 {
 public:
@@ -188,10 +182,14 @@ public:
 
         roomFdn.prepare (sr);
         chamberFdn.prepare (sr);
+        roomAmbComp.prepare (sr);
 
         midPhaseHpf.prepare (sr);   midPhaseHpf.setHighPass (150.0f, 0.7071f);
         airPhaseHpf.prepare (sr);   airPhaseHpf.setHighPass (240.0f, 0.7071f);
         deccaPhaseHpf.prepare (sr); deccaPhaseHpf.setHighPass (120.0f, 0.7071f);
+
+        deMudHpf.prepare (sr);      deMudHpf.setHighPass (165.0f, 0.7071f);
+        deMudDip.prepare (sr);      deMudDip.setPeak (275.0f, -4.5f, 1.1f);
 
         apMidL.prepare (static_cast<size_t> (sr * 0.0053));
         apMidR.prepare (static_cast<size_t> (sr * 0.0067));
@@ -213,8 +211,9 @@ public:
         std::fill (erBufL.begin(), erBufL.end(), 0.0f);
         std::fill (erBufR.begin(), erBufR.end(), 0.0f);
         erWritePos = 0;
-        roomFdn.reset(); chamberFdn.reset();
+        roomFdn.reset(); chamberFdn.reset(); roomAmbComp.reset();
         midPhaseHpf.reset(); airPhaseHpf.reset(); deccaPhaseHpf.reset();
+        deMudHpf.reset(); deMudDip.reset();
         apMidL.reset(); apMidR.reset(); apAirL.reset(); apAirR.reset();
         preDelay.reset(); customConvolver.reset();
     }
@@ -244,6 +243,9 @@ public:
         const float damp = cfg.wallsLive ? 0.26f : 0.56f;
         roomFdn.setProfile (cfg.roomIdx == 0 ? studioADelays : studioBDelays, baseRt60, damp, 0.35f);
 
+        if (cfg.roomParallelCrush)
+            roomAmbComp.configure (3, -24.0f, true, true);
+
         const float roomW = (cfg.roomIdx == 0) ? 16.0f : 10.5f;
         const float roomD = (cfg.roomIdx == 0) ? 12.0f : 8.5f;
         const float speed = 343.0f;
@@ -252,9 +254,13 @@ public:
         std::array<float, 4> distMeters {};
         std::array<float, 4> panL {}, panR {};
         std::array<float, 4> delaySamples {};
+        std::array<float, 4> activeGain {};
 
         for (size_t s = 0; s < 4; ++s)
         {
+            const bool mutedBySolo = (cfg.soloStandIdx >= 0 && cfg.soloStandIdx != static_cast<int> (s));
+            activeGain[s] = mutedBySolo ? 0.0f : cfg.micGain[s];
+
             const float mx = cfg.micX[s] * (roomW * 0.38f);
             const float my = juce::jmap (cfg.micY[s], 0.0f, 1.0f, 1.2f, roomD - 1.2f);
             distMeters[s] = std::hypot (mx, my);
@@ -295,18 +301,20 @@ public:
         auto* left  = buffer.getWritePointer (0);
         auto* right = buffer.getWritePointer (1);
         const int numSamples = buffer.getNumSamples();
+        float dummyGr = 0.0f;
 
         for (int i = 0; i < numSamples; ++i)
         {
             const float dryL = left[i];
             const float dryR = right[i];
 
+            // Fuentes Mono (Vocals, Guitar Cab Mono, Bass Amp) vs Estéreo
             float srcL = dryL, srcR = dryR;
-            if (cfg.sourceIdx == 0)
+            if (cfg.sourceIdx == 0 || cfg.sourceIdx == 4 || cfg.sourceIdx == 6)
             {
                 srcL = srcR = 0.5f * (dryL + dryR);
             }
-            else if (cfg.sourceIdx == 3)
+            else if (cfg.sourceIdx == 3) // Monitors Swedien Acoustic Crosstalk
             {
                 srcL = dryL * 0.82f + dryR * 0.18f;
                 srcR = dryR * 0.82f + dryL * 0.18f;
@@ -328,12 +336,13 @@ public:
             float fdnL = 0.0f, fdnR = 0.0f;
             roomFdn.processStereo (srcL + erL * 0.35f, srcR + erR * 0.35f, fdnL, fdnR);
 
-            float mixL = 0.0f, mixR = 0.0f;
+            float mainL = 0.0f, mainR = 0.0f;
+            float ambL  = 0.0f, ambR  = 0.0f;
 
             // ATRIL 1: MAIN
-            if (cfg.micGain[0] > 0.001f)
+            if (activeGain[0] > 0.001f)
             {
-                const float g = cfg.micGain[0];
+                const float g = activeGain[0];
                 const float yDist = cfg.micY[0];
                 const float dirW = juce::jmap (yDist, 0.0f, 1.0f, 0.94f, 0.35f);
                 const float ambW = juce::jmap (yDist, 0.0f, 1.0f, 0.14f, 0.65f);
@@ -347,14 +356,14 @@ public:
                 if (! cfg.mainStereo)
                     sL = sR = 0.5f * (sL + sR);
 
-                mixL += sL * panL[0] * g;
-                mixR += sR * panR[0] * g;
+                mainL += sL * panL[0] * g;
+                mainR += sR * panR[0] * g;
             }
 
             // ATRIL 2: MID
-            if (cfg.micGain[1] > 0.001f)
+            if (activeGain[1] > 0.001f)
             {
-                const float g = cfg.micGain[1] * 0.78f;
+                const float g = activeGain[1] * 0.78f;
                 const float yDist = cfg.micY[1];
                 float mL = readFrac (erBufL, delaySamples[1]) * (1.0f - yDist * 0.55f) * 0.45f + erL * 0.85f + fdnL * 0.65f;
                 float mR = readFrac (erBufR, delaySamples[1]) * (1.0f - yDist * 0.55f) * 0.45f + erR * 0.85f + fdnR * 0.65f;
@@ -367,14 +376,14 @@ public:
 
                 const float mid  = 0.5f * (mL + mR);
                 const float side = 0.5f * (mL - mR) * pairW;
-                mixL += (mid + side) * panL[1] * g;
-                mixR += (mid - side) * panR[1] * g;
+                ambL += (mid + side) * panL[1] * g;
+                ambR += (mid - side) * panR[1] * g;
             }
 
-            // ATRIL 3: FAR / AIR
-            if (cfg.micGain[2] > 0.001f)
+            // ATRIL 3: AIR
+            if (activeGain[2] > 0.001f)
             {
-                const float g = cfg.micGain[2] * 0.82f;
+                const float g = activeGain[2] * 0.82f;
                 float aL = readFrac (erBufL, delaySamples[2]) * 0.25f + erL * 0.55f + fdnL * 1.15f;
                 float aR = readFrac (erBufR, delaySamples[2]) * 0.25f + erR * 0.55f + fdnR * 1.15f;
 
@@ -391,14 +400,14 @@ public:
 
                 const float mid  = 0.5f * (aL + aR);
                 const float side = 0.5f * (aL - aR) * pairW;
-                mixL += (mid + side) * panL[2] * g;
-                mixR += (mid - side) * panR[2] * g;
+                ambL += (mid + side) * panL[2] * g;
+                ambR += (mid - side) * panR[2] * g;
             }
 
             // ATRIL 4: DECCA TREE
-            if (cfg.micGain[3] > 0.001f)
+            if (activeGain[3] > 0.001f)
             {
-                const float g = cfg.micGain[3] * 0.72f;
+                const float g = activeGain[3] * 0.72f;
                 const float dBase = delaySamples[3];
                 const float capC = 0.5f * (readFrac (erBufL, dBase) + readFrac (erBufR, dBase));
                 const float capL = readFrac (erBufL, dBase + deccaSideOffset);
@@ -415,9 +424,23 @@ public:
 
                 const float mid  = 0.5f * (dL + dR);
                 const float side = 0.5f * (dL - dR) * deccaW;
-                mixL += (mid + side) * panL[3] * g;
-                mixR += (mid - side) * panR[3] * g;
+                ambL += (mid + side) * panL[3] * g;
+                ambR += (mid - side) * panR[3] * g;
             }
+
+            // Life Hack: DE-MUD (limpia graves/medios-bajos acumulados en ambiente)
+            if (cfg.deMudOn)
+            {
+                ambL = deMudDip.processSample (0, deMudHpf.processSample (0, ambL));
+                ambR = deMudDip.processSample (1, deMudHpf.processSample (1, ambR));
+            }
+
+            // Derivación de Compresión Paralela solo hacia los micrófonos de ambiente
+            if (cfg.roomParallelCrush && cfg.roomParallelAmt > 0.001f)
+                roomAmbComp.processStereoSample (ambL, ambR, cfg.roomParallelAmt, dummyGr);
+
+            const float mixL = mainL + ambL;
+            const float mixR = mainR + ambR;
 
             if (cfg.modeIdx == 0)
             {
@@ -437,7 +460,8 @@ public:
     void processChamber (juce::AudioBuffer<float>& mainBuffer,
                          juce::AudioBuffer<float>& scratchBuffer,
                          bool enabled, int chamberIdx, float sendMix,
-                         float decayNorm, float preDelayMs, float stereoWidth)
+                         float decayNorm, float preDelayMs, float stereoWidth,
+                         bool deMudOn, bool chamberParallelCrush, float parallelAmt)
     {
         if (! enabled || sendMix <= 0.001f || mainBuffer.getNumChannels() < 2) return;
 
@@ -490,15 +514,29 @@ public:
             }
         }
 
+        if (chamberParallelCrush && parallelAmt > 0.001f)
+            roomAmbComp.configure (3, -24.0f, true, true);
+
         auto* sL = scratchBuffer.getWritePointer (0);
         auto* sR = scratchBuffer.getWritePointer (1);
         auto* mL = mainBuffer.getWritePointer (0);
         auto* mR = mainBuffer.getWritePointer (1);
+        float dummyGr = 0.0f;
 
         for (int i = 0; i < numSamples; ++i)
         {
-            const float mid  = 0.5f * (sL[i] + sR[i]);
-            const float side = 0.5f * (sL[i] - sR[i]) * stereoWidth;
+            float cL = sL[i];
+            float cR = sR[i];
+            if (deMudOn)
+            {
+                cL = deMudDip.processSample (0, deMudHpf.processSample (0, cL));
+                cR = deMudDip.processSample (1, deMudHpf.processSample (1, cR));
+            }
+            if (chamberParallelCrush && parallelAmt > 0.001f)
+                roomAmbComp.processStereoSample (cL, cR, parallelAmt, dummyGr);
+
+            const float mid  = 0.5f * (cL + cR);
+            const float side = 0.5f * (cL - cR) * stereoWidth;
             mL[i] += (mid + side) * sendMix;
             mR[i] += (mid - side) * sendMix;
         }
@@ -521,8 +559,10 @@ private:
     float airLpL = 0.0f, airLpR = 0.0f;
 
     StereoBiquad midPhaseHpf, airPhaseHpf, deccaPhaseHpf;
+    StereoBiquad deMudHpf, deMudDip;
     SimpleAllPass apMidL, apMidR, apAirL, apAirR;
     HadamardFDN roomFdn, chamberFdn;
+    VintageCompressor roomAmbComp;
 
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> preDelay { 48000 };
     juce::dsp::Convolution customConvolver;

@@ -125,74 +125,115 @@ private:
 };
 
 //==============================================================================
-// Etapa Analógica con Oversampling 4x (Válvulas, Transformadores y Cono de Parlante)
+// EQ de Consola Analógica con Frecuencias Seleccionables + Etapa de Válvula Sincronizada
 //==============================================================================
-class OversampledAnalogStage
+class ConsoleEqWithTubeStage
 {
 public:
-    OversampledAnalogStage()
-        : oversampling (2, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true)
-    {}
-
-    void prepare (int maxBlockSize)
+    void prepare (double oversampledRate)
     {
-        oversampling.initProcessing (static_cast<size_t> (maxBlockSize));
+        sr = oversampledRate > 0.0 ? oversampledRate : 176400.0;
+        hpf.prepare (sr); low.prepare (sr); pultecDip.prepare (sr);
+        mid.prepare (sr); high.prepare (sr);
         reset();
     }
 
     void reset()
     {
-        oversampling.reset();
+        hpf.reset(); low.reset(); pultecDip.reset(); mid.reset(); high.reset();
         dcIn = { 0.0f, 0.0f };
         dcOut = { 0.0f, 0.0f };
     }
 
-    int getLatencySamples() const { return static_cast<int> (oversampling.getLatencyInSamples()); }
-
-    void process (juce::AudioBuffer<float>& buffer, float drive, bool speakerBreakup)
+    void updateParameters (int eqModel, float hpfHz,
+                           int lowFreqIdx, float lowDb,
+                           int midFreqIdx, float midDb,
+                           int highFreqIdx, float highDb,
+                           bool tubeSync, int manualTubeIdx)
     {
-        if (drive <= 0.005f && ! speakerBreakup) return;
-        if (buffer.getNumChannels() < 2) return;
+        static constexpr std::array<float, 3> lowFreqs  { 60.0f, 110.0f, 220.0f };
+        static constexpr std::array<float, 4> midFreqs  { 700.0f, 1600.0f, 3200.0f, 4800.0f };
+        static constexpr std::array<float, 3> highFreqs { 10000.0f, 12000.0f, 16000.0f };
 
-        juce::dsp::AudioBlock<float> block (buffer);
-        auto upBlock = oversampling.processSamplesUp (block);
+        const float fLow  = lowFreqs[static_cast<size_t> (std::clamp (lowFreqIdx, 0, 2))];
+        const float fMid  = midFreqs[static_cast<size_t> (std::clamp (midFreqIdx, 0, 3))];
+        const float fHigh = highFreqs[static_cast<size_t> (std::clamp (highFreqIdx, 0, 2))];
 
-        const float preGain = 1.0f + drive * 3.2f + (speakerBreakup ? 0.55f : 0.0f);
-        const float postGain = 1.0f / (1.0f + drive * 1.45f + (speakerBreakup ? 0.25f : 0.0f));
-        const float bias = 0.08f * drive + (speakerBreakup ? 0.04f : 0.0f);
-        const float biasComp = std::tanh (bias);
+        if (hpfHz > 22.0f) hpf.setHighPass (hpfHz, 0.7071f);
+        else               hpf.setBypass();
 
-        const auto numCh = std::min<size_t> (2, upBlock.getNumChannels());
-        const auto numSamples = upBlock.getNumSamples();
+        pultecDip.setBypass();
 
-        for (size_t ch = 0; ch < numCh; ++ch)
+        if (eqModel == 0) // Neve 1073 (British Class-A)
         {
-            auto* data = upBlock.getChannelPointer (ch);
-            for (size_t i = 0; i < numSamples; ++i)
-            {
-                const float x = data[i] * preGain;
-                float y = std::tanh (x + bias) - biasComp;
-                if (speakerBreakup)
-                    y = 0.72f * std::tanh (y * 1.45f) + 0.28f * y;
-
-                const float dc = y - dcIn[ch] + 0.9985f * dcOut[ch];
-                dcIn[ch] = y;
-                dcOut[ch] = dc;
-                data[i] = dc * postGain;
-            }
+            low.setLowShelf (fLow, lowDb);
+            mid.setPeak (fMid, midDb, 0.85f);
+            high.setHighShelf (fHigh, highDb);
+        }
+        else if (eqModel == 1) // Pultec EQP-1A (Tube Passive)
+        {
+            low.setLowShelf (fLow * 0.92f, lowDb * 1.10f);
+            if (lowDb > 0.5f)
+                pultecDip.setPeak (fLow * 2.45f, -lowDb * 0.36f, 1.15f);
+            mid.setPeak (fMid, midDb, 0.65f);
+            high.setHighShelf (fHigh, highDb * 1.05f);
+        }
+        else if (eqModel == 2) // API 550A (Proportional Q Punch)
+        {
+            const float propQ = 0.90f + std::abs (midDb) * 0.09f;
+            low.setLowShelf (fLow, lowDb);
+            mid.setPeak (fMid, midDb, propQ);
+            high.setHighShelf (fHigh * 0.90f, highDb);
+        }
+        else // SSL 4000E (Surgical Console)
+        {
+            low.setLowShelf (fLow, lowDb);
+            mid.setPeak (fMid, midDb, 1.55f);
+            high.setHighShelf (fHigh, highDb);
         }
 
-        oversampling.processSamplesDown (block);
+        // Perfil de válvula/transformador sincronizado con el EQ elegido
+        activeTubeProfile = tubeSync ? eqModel : std::clamp (manualTubeIdx, 0, 3);
+        const float eqPush = (std::abs (lowDb) + std::abs (midDb) + std::abs (highDb)) / 36.0f;
+
+        if (activeTubeProfile == 0)      { satDrive = 0.22f + eqPush * 0.25f; satBias = 0.045f; } // Neve Transformer/Class-A
+        else if (activeTubeProfile == 1) { satDrive = 0.28f + eqPush * 0.22f; satBias = 0.065f; } // Pultec 12AX7/12AU7 Tube
+        else if (activeTubeProfile == 2) { satDrive = 0.19f + eqPush * 0.28f; satBias = 0.025f; } // API 2520 Op-Amp Punch
+        else                             { satDrive = 0.08f + eqPush * 0.12f; satBias = 0.010f; } // SSL Clean VCA
+    }
+
+    inline void processSample (int ch, float& x) noexcept
+    {
+        x = hpf.processSample (ch, x);
+        x = low.processSample (ch, x);
+        x = pultecDip.processSample (ch, x);
+        x = mid.processSample (ch, x);
+        x = high.processSample (ch, x);
+
+        // Etapa armónica sincronizada con el EQ dentro del oversampling 4x
+        const float pre = 1.0f + satDrive * 1.35f;
+        const float post = 1.0f / (1.0f + satDrive * 0.62f);
+        const float biasComp = std::tanh (satBias);
+        const float y = std::tanh (x * pre + satBias) - biasComp;
+
+        const auto c = static_cast<size_t> (ch & 1);
+        const float dc = y - dcIn[c] + 0.9992f * dcOut[c];
+        dcIn[c] = y;
+        dcOut[c] = dc;
+        x = dc * post;
     }
 
 private:
-    juce::dsp::Oversampling<float> oversampling;
+    double sr = 176400.0;
+    StereoBiquad hpf, low, pultecDip, mid, high;
+    int activeTubeProfile = 0;
+    float satDrive = 0.20f, satBias = 0.04f;
     std::array<float, 2> dcIn { 0.0f, 0.0f };
     std::array<float, 2> dcOut { 0.0f, 0.0f };
 };
 
 //==============================================================================
-// Rack de Compresores Clásicos con Bypass Independiente (1176LN, LA-2A, Tube)
+// Compresor Clásico (soporta modo Principal con MIX/SC y modo Paralelo Crush)
 //==============================================================================
 class VintageCompressor
 {
@@ -207,107 +248,254 @@ public:
 
     void reset()
     {
-        envFast = 0.0f;
-        envSlow = 0.0f;
+        envFast = { 0.0f, 0.0f };
+        envSlow = { 0.0f, 0.0f };
         scHpf.reset();
         gainReductionDb.store (0.0f);
     }
 
-    void process (juce::AudioBuffer<float>& buffer, bool enabled, int compType, float thresholdDb)
+    void configure (int compType, float thresholdDb, bool useScFilter, bool linkStereo)
     {
-        if (! enabled)
-        {
-            gainReductionDb.store (0.0f);
-            return;
-        }
-
-        const int numCh = std::min (2, buffer.getNumChannels());
-        const int numSamples = buffer.getNumSamples();
-
-        float ratio = 4.0f, attackMs = 0.6f, relFastMs = 55.0f, relSlowMs = 55.0f;
-        float kneeDb = 3.0f, makeupDb = 0.0f;
-        bool useScHpf = false, isOpto = false;
+        thresh = thresholdDb;
+        scFilterOn = useScFilter;
+        stereoLinked = linkStereo;
 
         if (compType == 0) // 1176LN (FET)
         {
-            ratio = 6.0f; attackMs = 0.45f; relFastMs = 55.0f; kneeDb = 2.0f; makeupDb = 2.0f;
+            ratio = 6.0f; attackMs = 0.45f; relFastMs = 55.0f; relSlowMs = 55.0f;
+            kneeDb = 2.0f; makeupDb = 2.0f; isOpto = false;
         }
         else if (compType == 1) // LA-2A (Opto)
         {
             ratio = 3.2f; attackMs = 10.0f; relFastMs = 65.0f; relSlowMs = 520.0f;
             kneeDb = 6.0f; makeupDb = 1.5f; isOpto = true;
         }
-        else // Mastering Tube
+        else if (compType == 2) // Mastering (Tube)
         {
-            ratio = 2.2f; attackMs = 18.0f; relFastMs = 165.0f; kneeDb = 8.0f;
-            makeupDb = 1.0f; useScHpf = true;
+            ratio = 2.2f; attackMs = 18.0f; relFastMs = 165.0f; relSlowMs = 165.0f;
+            kneeDb = 8.0f; makeupDb = 1.0f; isOpto = false;
+        }
+        else // Parallel Crush (All-Buttons-In Style)
+        {
+            ratio = 12.0f; attackMs = 0.25f; relFastMs = 42.0f; relSlowMs = 110.0f;
+            kneeDb = 1.5f; makeupDb = 4.5f; isOpto = true;
         }
 
-        const float atkCoeff = std::exp (-1.0f / (0.001f * attackMs * static_cast<float> (sr)));
-        const float relFastCoeff = std::exp (-1.0f / (0.001f * relFastMs * static_cast<float> (sr)));
-        const float relSlowCoeff = std::exp (-1.0f / (0.001f * relSlowMs * static_cast<float> (sr)));
-        const float makeupLin = juce::Decibels::decibelsToGain (makeupDb);
-
-        float maxGr = 0.0f;
-        auto* left  = buffer.getWritePointer (0);
-        auto* right = numCh > 1 ? buffer.getWritePointer (1) : nullptr;
-
-        for (int i = 0; i < numSamples; ++i)
-        {
-            float detL = left[i];
-            float detR = right ? right[i] : detL;
-
-            if (useScHpf)
-            {
-                detL = scHpf.processSample (0, detL);
-                detR = scHpf.processSample (1, detR);
-            }
-
-            const float peak = std::max (std::abs (detL), std::abs (detR));
-            const float levelDb = juce::Decibels::gainToDecibels (peak + 1e-6f);
-
-            float overDb = 0.0f;
-            const float diff = levelDb - thresholdDb;
-            if (2.0f * diff < -kneeDb)
-                overDb = 0.0f;
-            else if (2.0f * std::abs (diff) <= kneeDb)
-                overDb = (diff + kneeDb * 0.5f) * (diff + kneeDb * 0.5f) / (2.0f * kneeDb);
-            else
-                overDb = diff;
-
-            const float targetGrDb = overDb * (1.0f - 1.0f / ratio);
-
-            if (targetGrDb > envFast)
-                envFast = atkCoeff * envFast + (1.0f - atkCoeff) * targetGrDb;
-            else
-                envFast = relFastCoeff * envFast + (1.0f - relFastCoeff) * targetGrDb;
-
-            float finalGrDb = envFast;
-            if (isOpto)
-            {
-                if (targetGrDb > envSlow)
-                    envSlow = atkCoeff * envSlow + (1.0f - atkCoeff) * targetGrDb;
-                else
-                    envSlow = relSlowCoeff * envSlow + (1.0f - relSlowCoeff) * targetGrDb;
-                finalGrDb = 0.55f * envFast + 0.45f * envSlow;
-            }
-
-            const float gainLin = juce::Decibels::decibelsToGain (-finalGrDb) * makeupLin;
-            left[i] *= gainLin;
-            if (right) right[i] *= gainLin;
-
-            if (finalGrDb > maxGr) maxGr = finalGrDb;
-        }
-
-        gainReductionDb.store (maxGr);
+        atkCoeff     = std::exp (-1.0f / (0.001f * attackMs  * static_cast<float> (sr)));
+        relFastCoeff = std::exp (-1.0f / (0.001f * relFastMs * static_cast<float> (sr)));
+        relSlowCoeff = std::exp (-1.0f / (0.001f * relSlowMs * static_cast<float> (sr)));
+        makeupLin    = juce::Decibels::decibelsToGain (makeupDb);
     }
 
+    inline void processStereoSample (float& inL, float& inR, float wetMix, float& frameMaxGr) noexcept
+    {
+        float detL = scFilterOn ? scHpf.processSample (0, inL) : inL;
+        float detR = scFilterOn ? scHpf.processSample (1, inR) : inR;
+
+        if (stereoLinked)
+        {
+            const float peak = std::max (std::abs (detL), std::abs (detR));
+            const float gr = computeChannelGr (0, peak);
+            const float gainLin = juce::Decibels::decibelsToGain (-gr) * makeupLin;
+            const float compL = inL * gainLin;
+            const float compR = inR * gainLin;
+            inL = inL * (1.0f - wetMix) + compL * wetMix;
+            inR = inR * (1.0f - wetMix) + compR * wetMix;
+            if (gr > frameMaxGr) frameMaxGr = gr;
+        }
+        else
+        {
+            const float grL = computeChannelGr (0, std::abs (detL));
+            const float grR = computeChannelGr (1, std::abs (detR));
+            const float compL = inL * juce::Decibels::decibelsToGain (-grL) * makeupLin;
+            const float compR = inR * juce::Decibels::decibelsToGain (-grR) * makeupLin;
+            inL = inL * (1.0f - wetMix) + compL * wetMix;
+            inR = inR * (1.0f - wetMix) + compR * wetMix;
+            const float m = std::max (grL, grR);
+            if (m > frameMaxGr) frameMaxGr = m;
+        }
+    }
+
+    void publishGr (float maxGr) noexcept { gainReductionDb.store (maxGr); }
     float getGainReductionDb() const { return gainReductionDb.load(); }
 
 private:
+    inline float computeChannelGr (int ch, float peak) noexcept
+    {
+        const auto c = static_cast<size_t> (ch & 1);
+        const float levelDb = juce::Decibels::gainToDecibels (peak + 1e-6f);
+
+        float overDb = 0.0f;
+        const float diff = levelDb - thresh;
+        if (2.0f * diff < -kneeDb)
+            overDb = 0.0f;
+        else if (2.0f * std::abs (diff) <= kneeDb)
+            overDb = (diff + kneeDb * 0.5f) * (diff + kneeDb * 0.5f) / (2.0f * kneeDb);
+        else
+            overDb = diff;
+
+        const float targetGrDb = overDb * (1.0f - 1.0f / ratio);
+
+        if (targetGrDb > envFast[c])
+            envFast[c] = atkCoeff * envFast[c] + (1.0f - atkCoeff) * targetGrDb;
+        else
+            envFast[c] = relFastCoeff * envFast[c] + (1.0f - relFastCoeff) * targetGrDb;
+
+        float finalGrDb = envFast[c];
+        if (isOpto)
+        {
+            if (targetGrDb > envSlow[c])
+                envSlow[c] = atkCoeff * envSlow[c] + (1.0f - atkCoeff) * targetGrDb;
+            else
+                envSlow[c] = relSlowCoeff * envSlow[c] + (1.0f - relSlowCoeff) * targetGrDb;
+            finalGrDb = 0.55f * envFast[c] + 0.45f * envSlow[c];
+        }
+        return finalGrDb;
+    }
+
     double sr = 44100.0;
-    float envFast = 0.0f;
-    float envSlow = 0.0f;
+    float thresh = -16.0f, ratio = 4.0f, attackMs = 0.6f, relFastMs = 55.0f, relSlowMs = 55.0f;
+    float kneeDb = 3.0f, makeupDb = 0.0f, makeupLin = 1.0f;
+    float atkCoeff = 0.9f, relFastCoeff = 0.99f, relSlowCoeff = 0.999f;
+    bool isOpto = false, scFilterOn = false, stereoLinked = true;
+
+    std::array<float, 2> envFast { 0.0f, 0.0f };
+    std::array<float, 2> envSlow { 0.0f, 0.0f };
     StereoBiquad scHpf;
     std::atomic<float> gainReductionDb { 0.0f };
+};
+
+//==============================================================================
+// Cadena Analógica Completa con Oversampling 4x Compartido (Cero Aliasing / Nyquist)
+//==============================================================================
+class OversampledConsoleChain
+{
+public:
+    OversampledConsoleChain()
+        : oversampling (2, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true)
+    {}
+
+    void prepare (double baseSampleRate, int maxBlockSize)
+    {
+        oversampling.initProcessing (static_cast<size_t> (maxBlockSize));
+        const double osRate = baseSampleRate * 4.0;
+        eqStage.prepare (osRate);
+        mainComp.prepare (osRate);
+        parallelComp.prepare (osRate);
+        reset();
+    }
+
+    void reset()
+    {
+        oversampling.reset();
+        eqStage.reset();
+        mainComp.reset();
+        parallelComp.reset();
+        dcIn = { 0.0f, 0.0f };
+        dcOut = { 0.0f, 0.0f };
+    }
+
+    int getLatencySamples() const { return static_cast<int> (oversampling.getLatencyInSamples()); }
+
+    ConsoleEqWithTubeStage eqStage;
+    VintageCompressor mainComp;
+    VintageCompressor parallelComp;
+
+    struct ChainSettings
+    {
+        int routingOrder = 0; // 0: EQ->Comp, 1: Comp->EQ
+        bool eqOn = true;
+        bool compOn = true;
+        float compMix = 1.0f;
+        bool parallelOn = false;
+        float parallelAmount = 0.35f;
+        float tubeDrive = 0.20f;
+        bool speakerBreakup = false;
+    };
+
+    void processBlock (juce::AudioBuffer<float>& buffer, const ChainSettings& s)
+    {
+        if (buffer.getNumChannels() < 2) return;
+
+        const bool anyActive = s.eqOn || s.compOn || s.parallelOn || s.tubeDrive > 0.005f || s.speakerBreakup;
+        if (! anyActive)
+        {
+            mainComp.publishGr (0.0f);
+            parallelComp.publishGr (0.0f);
+            return;
+        }
+
+        juce::dsp::AudioBlock<float> block (buffer);
+        auto upBlock = oversampling.processSamplesUp (block);
+        const auto numSamples = upBlock.getNumSamples();
+
+        auto* ptrL = upBlock.getChannelPointer (0);
+        auto* ptrR = upBlock.getChannelPointer (1);
+
+        const float preGain = 1.0f + s.tubeDrive * 3.0f + (s.speakerBreakup ? 0.50f : 0.0f);
+        const float postGain = 1.0f / (1.0f + s.tubeDrive * 1.40f + (s.speakerBreakup ? 0.22f : 0.0f));
+        const float bias = 0.075f * s.tubeDrive + (s.speakerBreakup ? 0.035f : 0.0f);
+        const float biasComp = std::tanh (bias);
+
+        float maxMainGr = 0.0f;
+        float maxParGr  = 0.0f;
+
+        for (size_t i = 0; i < numSamples; ++i)
+        {
+            float L = ptrL[i];
+            float R = ptrR[i];
+
+            // 1. Saturación de Consola / Cinta / Cono de Parlante en 4x
+            if (s.tubeDrive > 0.005f || s.speakerBreakup)
+            {
+                float yL = std::tanh (L * preGain + bias) - biasComp;
+                float yR = std::tanh (R * preGain + bias) - biasComp;
+                if (s.speakerBreakup)
+                {
+                    yL = 0.72f * std::tanh (yL * 1.45f) + 0.28f * yL;
+                    yR = 0.72f * std::tanh (yR * 1.45f) + 0.28f * yR;
+                }
+                const float dL = yL - dcIn[0] + 0.9992f * dcOut[0];
+                const float dR = yR - dcIn[1] + 0.9992f * dcOut[1];
+                dcIn[0] = yL; dcOut[0] = dL;
+                dcIn[1] = yR; dcOut[1] = dR;
+                L = dL * postGain;
+                R = dR * postGain;
+            }
+
+            // 2. Orden entre EQ Analógico y Compresor Principal
+            if (s.routingOrder == 1)
+            {
+                if (s.compOn) mainComp.processStereoSample (L, R, s.compMix, maxMainGr);
+                if (s.eqOn)   { eqStage.processSample (0, L); eqStage.processSample (1, R); }
+            }
+            else
+            {
+                if (s.eqOn)   { eqStage.processSample (0, L); eqStage.processSample (1, R); }
+                if (s.compOn) mainComp.processStereoSample (L, R, s.compMix, maxMainGr);
+            }
+
+            // 3. Segundo Compresor Paralelo Dedicado (Crush / Glue)
+            if (s.parallelOn && s.parallelAmount > 0.001f)
+            {
+                float pL = L;
+                float pR = R;
+                parallelComp.processStereoSample (pL, pR, 1.0f, maxParGr);
+                L = L + (pL - L) * s.parallelAmount;
+                R = R + (pR - R) * s.parallelAmount;
+            }
+
+            ptrL[i] = L;
+            ptrR[i] = R;
+        }
+
+        oversampling.processSamplesDown (block);
+        mainComp.publishGr (maxMainGr);
+        parallelComp.publishGr (maxParGr);
+    }
+
+private:
+    juce::dsp::Oversampling<float> oversampling;
+    std::array<float, 2> dcIn { 0.0f, 0.0f };
+    std::array<float, 2> dcOut { 0.0f, 0.0f };
 };

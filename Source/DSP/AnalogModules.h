@@ -125,7 +125,7 @@ private:
 };
 
 //==============================================================================
-// Etapa de Preamp Analógico Fidedigno (4 Arquitecturas Reales en 4x Oversampling)
+// Etapa de Preamp Analógico con Histéresis Aproximada en 4x Oversampling
 //==============================================================================
 class AnalogPreampStage
 {
@@ -133,10 +133,11 @@ public:
     void prepare (double oversampledRate)
     {
         sr = oversampledRate > 0.0 ? oversampledRate : 176400.0;
-        lowCoeff  = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 160.0f   / static_cast<float> (sr));
-        midCoeff  = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 1800.0f  / static_cast<float> (sr));
-        highCoeff = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 11000.0f / static_cast<float> (sr));
-        sagCoeff  = 1.0f - std::exp (-1.0f / (0.018f * static_cast<float> (sr)));
+        lowCoeff  = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 155.0f   / static_cast<float> (sr));
+        midCoeff  = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 1900.0f  / static_cast<float> (sr));
+        highCoeff = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 11500.0f / static_cast<float> (sr));
+        sagCoeff  = 1.0f - std::exp (-1.0f / (0.022f * static_cast<float> (sr)));
+        hystCoeff = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 680.0f   / static_cast<float> (sr));
         reset();
     }
 
@@ -145,6 +146,7 @@ public:
         lowState  = { 0.0f, 0.0f };
         midState  = { 0.0f, 0.0f };
         highState = { 0.0f, 0.0f };
+        fluxState = { 0.0f, 0.0f };
         sagEnv    = { 0.0f, 0.0f };
         dcIn      = { 0.0f, 0.0f };
         dcOut     = { 0.0f, 0.0f };
@@ -165,46 +167,56 @@ public:
 
         sagEnv[c] += sagCoeff * (std::abs (x) - sagEnv[c]);
 
+        // Estado de flujo magnético con memoria/histéresis suave
+        const float hystAmount = (circuit == 0 ? 0.34f : (circuit == 1 ? 0.24f : (circuit == 2 ? 0.28f : 0.10f))) * d;
+        fluxState[c] += hystCoeff * (x - fluxState[c]);
+        const float dFlux = (x - fluxState[c]) * hystAmount;
+
         float y = x;
 
-        if (circuit == 0) // NEVE CLASS-A (1073 + Transformador Marinair)
-        {
-            const float pre = 1.0f + d * 2.8f;
-            const float xFed = (x + lows * (0.42f * d)) * pre;
-            const float bias = 0.09f * d + 0.04f * d * sagEnv[c];
-            const float shaped = std::tanh (xFed + bias) - std::tanh (bias);
-            const float warm = shaped - highs * (0.12f * d);
-            y = warm / (1.0f + d * 1.35f);
-        }
-        else if (circuit == 1) // PULTEC 12AX7 (Triodo a Tubos Asimétrico)
-        {
-            const float sag = 1.0f / (1.0f + sagEnv[c] * 0.45f * d);
-            const float pre = (1.0f + d * 2.6f) * sag;
-            const float xIn = x * pre;
-            float shaped = 0.0f;
-            if (xIn >= 0.0f)
-                shaped = std::tanh (xIn * 1.18f) / 1.18f;
-            else
-                shaped = (2.0f / juce::MathConstants<float>::pi) * std::atan (xIn * 0.92f) * 1.15f;
-            y = (shaped + highs * (0.08f * d)) / (1.0f + d * 1.18f);
-        }
-        else if (circuit == 2) // API 2520 (Op-Amp Discreto + Punch en Medios)
+        if (circuit == 0) // NEVE CLASS-A (1073 + Núcleo Marinair con histéresis cálida)
         {
             const float pre = 1.0f + d * 3.1f;
-            const float xFed = (x - lows * (0.16f * d) + mids * (0.38f * d)) * pre;
+            const float xFed = (x + lows * (0.45f * d) + dFlux * 1.45f) * pre;
+            const float bias = 0.11f * d + 0.05f * d * sagEnv[c];
+            const float shaped = std::tanh (xFed + bias) - std::tanh (bias);
+            const float warm = shaped - highs * (0.14f * d) + fluxState[c] * (0.18f * d);
+            y = warm / (1.0f + d * 1.38f);
+        }
+        else if (circuit == 1) // PULTEC 12AX7 (Triodo a Tubos Asimétrico + Sag)
+        {
+            const float sag = 1.0f / (1.0f + sagEnv[c] * 0.50f * d);
+            const float pre = (1.0f + d * 2.85f) * sag;
+            const float xIn = (x + dFlux * 0.85f) * pre;
+            float shaped = 0.0f;
+            if (xIn >= 0.0f)
+                shaped = std::tanh (xIn * 1.22f) / 1.22f;
+            else
+                shaped = (2.0f / juce::MathConstants<float>::pi) * std::atan (xIn * 0.94f) * 1.16f;
+            y = (shaped + highs * (0.10f * d)) / (1.0f + d * 1.20f);
+        }
+        else if (circuit == 2) // API 2520 (Op-Amp Discreto + Golpe de Medios y Flujo Rápido)
+        {
+            const float pre = 1.0f + d * 3.4f;
+            const float xFed = (x - lows * (0.15f * d) + mids * (0.46f * d) + dFlux * 1.15f) * pre;
             const float shaped = xFed / std::sqrt (1.0f + xFed * xFed);
-            y = (shaped + lows * (0.12f * d)) / (1.0f + d * 1.42f);
+            y = (shaped + lows * (0.14f * d)) / (1.0f + d * 1.45f);
         }
         else // SSL CLEAN (4000E Alto Headroom)
         {
-            const float pre = 1.0f + d * 1.45f;
-            const float xIn = x * pre;
+            const float pre = 1.0f + d * 1.55f;
+            const float xIn = (x + dFlux * 0.35f) * pre;
             const float shaped = 0.65f * std::tanh (xIn) + 0.35f * (xIn / std::sqrt (1.0f + 0.5f * xIn * xIn));
-            y = (shaped + highs * (0.10f * d)) / (1.0f + d * 0.72f);
+            y = (shaped + highs * (0.11f * d)) / (1.0f + d * 0.74f);
         }
 
         if (speakerBreakup)
-            y = 0.76f * std::tanh (y * 1.38f) + 0.24f * y;
+        {
+            // Ruptura de parlante con asimetría sutil y mordida de cono
+            const float spkIn = y * (1.35f + d * 0.65f) + dFlux * 0.75f;
+            const float spkSat = std::tanh (spkIn + 0.06f * d);
+            y = 0.72f * spkSat + 0.28f * y;
+        }
 
         const float dc = y - dcIn[c] + 0.9994f * dcOut[c];
         dcIn[c] = y;
@@ -214,13 +226,161 @@ public:
 
 private:
     double sr = 176400.0;
-    float lowCoeff = 0.005f, midCoeff = 0.06f, highCoeff = 0.30f, sagCoeff = 0.0003f;
+    float lowCoeff = 0.005f, midCoeff = 0.06f, highCoeff = 0.30f, sagCoeff = 0.0003f, hystCoeff = 0.024f;
     std::array<float, 2> lowState  { 0.0f, 0.0f };
     std::array<float, 2> midState  { 0.0f, 0.0f };
     std::array<float, 2> highState { 0.0f, 0.0f };
+    std::array<float, 2> fluxState { 0.0f, 0.0f };
     std::array<float, 2> sagEnv    { 0.0f, 0.0f };
     std::array<float, 2> dcIn      { 0.0f, 0.0f };
     std::array<float, 2> dcOut     { 0.0f, 0.0f };
+};
+
+//==============================================================================
+// Voicing de Gabinete (Guitar Cab Mono, Guitar Cab Stereo Crudo y Bass Amp)
+//==============================================================================
+class CabinetVoicingStage
+{
+public:
+    void prepare (double sampleRate)
+    {
+        sr = sampleRate > 0.0 ? sampleRate : 44100.0;
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            hpf[ch].prepare (sr);
+            lpf[ch].prepare (sr);
+            cabBox[ch].prepare (sr);
+            coneEdge[ch].prepare (sr);
+            harshBit[ch].prepare (sr);
+        }
+        reset();
+    }
+
+    void reset()
+    {
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            hpf[ch].reset();
+            lpf[ch].reset();
+            cabBox[ch].reset();
+            coneEdge[ch].reset();
+            harshBit[ch].reset();
+        }
+    }
+
+    void configure (int sourceIdx, float driveAmount)
+    {
+        active = false;
+        stereoSpreadAmount = 0.0f;
+        const float drv = std::clamp (driveAmount, 0.0f, 1.0f);
+
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            hpf[ch].setBypass();
+            lpf[ch].setBypass();
+            cabBox[ch].setBypass();
+            coneEdge[ch].setBypass();
+            harshBit[ch].setBypass();
+        }
+
+        if (sourceIdx == 4) // GUITAR CAB (MONO): directo, medios firmes y pico de cono
+        {
+            active = true;
+            stereoSpreadAmount = 0.0f;
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                hpf[ch].setHighPass (92.0f, 0.78f);
+                lpf[ch].setLowPass (5800.0f, 0.85f);
+                cabBox[ch].setPeak (520.0f, 2.4f + drv * 1.4f, 1.15f);
+                coneEdge[ch].setPeak (2350.0f, 3.8f + drv * 2.2f, 1.65f);
+                harshBit[ch].setPeak (3850.0f, 1.8f + drv * 2.8f, 2.2f);
+            }
+        }
+        else if (sourceIdx == 5) // GUITAR CAB (STEREO): dos gabinetes/mics con medios estridentes/filosos controlados
+        {
+            active = true;
+            stereoSpreadAmount = 0.34f;
+
+            // Canal L: más presencia/filo en medios altos (tipo mic cerca del cono)
+            hpf[0].setHighPass (84.0f, 0.75f);
+            lpf[0].setLowPass (6700.0f, 0.80f);
+            cabBox[0].setPeak (580.0f, 2.0f + drv * 1.2f, 1.1f);
+            coneEdge[0].setPeak (2650.0f, 4.5f + drv * 2.4f, 1.75f);
+            harshBit[0].setPeak (4150.0f, 2.8f + drv * 3.4f, 2.4f);
+
+            // Canal R: más cuerpo de caja y un pico desplazado para abrir en estéreo
+            hpf[1].setHighPass (96.0f, 0.78f);
+            lpf[1].setLowPass (5950.0f, 0.85f);
+            cabBox[1].setPeak (440.0f, 3.2f + drv * 1.6f, 1.2f);
+            coneEdge[1].setPeak (2150.0f, 3.6f + drv * 2.0f, 1.55f);
+            harshBit[1].setPeak (3550.0f, 2.2f + drv * 3.0f, 2.1f);
+        }
+        else if (sourceIdx == 6) // BASS AMP (LOW END): grave sólido, pegada y corte de agudos chillones
+        {
+            active = true;
+            stereoSpreadAmount = 0.0f;
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                hpf[ch].setHighPass (36.0f, 0.82f);
+                lpf[ch].setLowPass (3650.0f, 0.85f);
+                cabBox[ch].setLowShelf (105.0f, 3.4f + drv * 1.8f);
+                coneEdge[ch].setPeak (780.0f, 2.2f + drv * 1.6f, 1.25f);
+                harshBit[ch].setPeak (2100.0f, 1.2f + drv * 1.4f, 1.6f);
+            }
+        }
+    }
+
+    void processBuffer (juce::AudioBuffer<float>& buffer) noexcept
+    {
+        if (! active || buffer.getNumChannels() < 2) return;
+
+        const int numSamples = buffer.getNumSamples();
+        auto* L = buffer.getWritePointer (0);
+        auto* R = buffer.getWritePointer (1);
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            float lSample = L[i];
+            float rSample = R[i];
+
+            if (stereoSpreadAmount <= 0.001f)
+            {
+                const float monoIn = 0.5f * (lSample + rSample);
+                float out = hpf[0].processSample (0, monoIn);
+                out = cabBox[0].processSample (0, out);
+                out = coneEdge[0].processSample (0, out);
+                out = harshBit[0].processSample (0, out);
+                out = lpf[0].processSample (0, out);
+                L[i] = out;
+                R[i] = out;
+            }
+            else
+            {
+                float outL = hpf[0].processSample (0, lSample);
+                outL = cabBox[0].processSample (0, outL);
+                outL = coneEdge[0].processSample (0, outL);
+                outL = harshBit[0].processSample (0, outL);
+                outL = lpf[0].processSample (0, outL);
+
+                float outR = hpf[1].processSample (1, rSample);
+                outR = cabBox[1].processSample (1, outR);
+                outR = coneEdge[1].processSample (1, outR);
+                outR = harshBit[1].processSample (1, outR);
+                outR = lpf[1].processSample (1, outR);
+
+                const float mid = 0.5f * (outL + outR);
+                const float side = 0.5f * (outL - outR) * (1.0f + stereoSpreadAmount);
+                L[i] = mid + side;
+                R[i] = mid - side;
+            }
+        }
+    }
+
+private:
+    double sr = 44100.0;
+    bool active = false;
+    float stereoSpreadAmount = 0.0f;
+    std::array<StereoBiquad, 2> hpf, lpf, cabBox, coneEdge, harshBit;
 };
 
 //==============================================================================

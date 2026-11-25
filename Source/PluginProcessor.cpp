@@ -19,8 +19,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProProcessor::
         "chainOrder", "Routing", juce::StringArray { "EQ -> Comp -> Chamber", "Comp -> EQ -> Chamber", "Chamber -> Comp -> EQ" }, 0));
     p.push_back (std::make_unique<juce::AudioParameterBool> ("phaseAlign", "Phase Safe Auto-Align", true));
     p.push_back (std::make_unique<juce::AudioParameterBool> ("phaseInvert", "Polarity Invert", false));
+    p.push_back (std::make_unique<juce::AudioParameterBool> ("deMudOn", "De-Mud Anti-Boxiness", false));
 
-    // Emulador de Micrófonos Vocales con Input y Output independientes (OFF por defecto)
+    // Emulador de Micrófonos Vocales con Input y Output independientes
     p.push_back (std::make_unique<juce::AudioParameterBool> ("vocalModOn", "Vocal Mic Mod ON", false));
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
         "vocalSrcMic", "Input Mic", juce::StringArray { "Shure SM27", "Shure SM57", "Shure SM7B", "Generic LDC" }, 2));
@@ -29,14 +30,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProProcessor::
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("vocalInGain",  "Mic Mod Input (dB)",  -18.0f, 18.0f, 0.0f));
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("vocalOutGain", "Mic Mod Output (dB)", -18.0f, 18.0f, 0.0f));
 
-    // Sala Rústica independiente (ON/OFF), Fuente, Monitores y Estéreo
+    // Sala Rústica independiente (Bypass total cuando está OFF), 7 Fuentes y Estéreo
     p.push_back (std::make_unique<juce::AudioParameterBool> ("roomOn", "Room Stage Power", true));
     p.push_back (std::make_unique<juce::AudioParameterBool> ("mainStereo", "Main Mic Stereo", false));
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("pairSpread", "Mid/Air Pair Width", 0.0f, 1.5f, 1.0f));
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("deccaWidth", "Decca Tree Spread",  0.2f, 1.5f, 1.0f));
 
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
-        "source", "Source", juce::StringArray { "Vocals", "Drums", "Ensemble", "Monitors (Swedien)" }, 0));
+        "source", "Source", juce::StringArray {
+            "Vocals", "Drums", "Ensemble", "Monitors (Swedien)",
+            "Guitar Cab (Mono)", "Guitar Cab (Stereo)", "Bass Amp (Low End)"
+        }, 0));
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
         "monitorType", "Monitor", juce::StringArray { "Altec Main", "NS-10 Nearfield", "JBL PA Wedge" }, 0));
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
@@ -73,22 +77,41 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProProcessor::
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("chamberPreDelay", "Pre-Delay (ms)", 0.0f, 150.0f, 22.0f));
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("chamberWidth", "Chamber Width", 0.0f, 1.5f, 1.0f));
 
-    // Ecualizador de Consola con ON/OFF y 4 Modelos
+    // Ecualizador de Consola con Frecuencias Reales + Válvulas Sincronizadas (4x Oversampled)
     p.push_back (std::make_unique<juce::AudioParameterBool> ("eqOn", "EQ Power", true));
+    p.push_back (std::make_unique<juce::AudioParameterBool> ("eqTubeSync", "EQ Tube Sync", true));
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
         "eqType", "EQ Model", juce::StringArray {
             "Neve 1073 (British)", "Pultec EQP-1A (Tube)", "API 550A (Punch)", "SSL 4000E (Clean)"
         }, 0));
+    p.push_back (std::make_unique<juce::AudioParameterChoice> (
+        "eqTubeModel", "Tube Circuit", juce::StringArray {
+            "Neve Class-A", "Pultec 12AX7", "API 2520", "SSL Clean"
+        }, 0));
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("eqHpf", "HPF (Hz)", 20.0f, 300.0f, 20.0f));
+    p.push_back (std::make_unique<juce::AudioParameterChoice> (
+        "eqLowFreq", "Low Freq", juce::StringArray { "60 Hz", "110 Hz", "220 Hz" }, 1));
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("eqLow", "Low (dB)", -12.0f, 12.0f, 0.0f));
+    p.push_back (std::make_unique<juce::AudioParameterChoice> (
+        "eqMidFreq", "Mid Freq", juce::StringArray { "700 Hz", "1.6 kHz", "3.2 kHz", "4.8 kHz" }, 1));
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("eqMid", "Mid (dB)", -12.0f, 12.0f, 0.0f));
+    p.push_back (std::make_unique<juce::AudioParameterChoice> (
+        "eqHighFreq", "High Freq", juce::StringArray { "10 kHz", "12 kHz", "16 kHz" }, 1));
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("eqHigh", "High (dB)", -12.0f, 12.0f, 0.0f));
 
-    // Compresor Outboard con ON/OFF
+    // Compresor Principal (con MIX, SC Link, SC Filter) + Compresor Paralelo Dedicado
     p.push_back (std::make_unique<juce::AudioParameterBool> ("compOn", "Compressor Power", true));
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
         "compType", "Comp Model", juce::StringArray { "1176LN (FET)", "LA-2A (Opto)", "Mastering (Tube)" }, 0));
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("compThresh", "Threshold (dB)", -40.0f, 0.0f, -16.0f));
+    p.push_back (std::make_unique<juce::AudioParameterFloat> ("compMix", "Comp Mix", 0.0f, 1.0f, 1.0f));
+    p.push_back (std::make_unique<juce::AudioParameterBool> ("compScLink", "SC Stereo Link", true));
+    p.push_back (std::make_unique<juce::AudioParameterBool> ("compScFilter", "SC HPF Filter", false));
+
+    p.push_back (std::make_unique<juce::AudioParameterBool> ("parCompOn", "Parallel Comp ON", false));
+    p.push_back (std::make_unique<juce::AudioParameterFloat> ("parCompAmt", "Parallel Blend", 0.0f, 1.0f, 0.35f));
+    p.push_back (std::make_unique<juce::AudioParameterChoice> (
+        "parCompRoute", "Parallel Target", juce::StringArray { "All Bus", "Room Mics", "Chamber" }, 1));
 
     // Master Output
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("outputGain", "Output (dB)", -18.0f, 12.0f, 0.0f));
@@ -101,17 +124,14 @@ void BenBocazStudioProProcessor::prepareToPlay (double sampleRate, int samplesPe
     currentSampleRate = sampleRate;
 
     srcHpf.prepare (sampleRate); srcLpf.prepare (sampleRate); srcMid.prepare (sampleRate);
-    eqHpf.prepare (sampleRate);  eqLow.prepare (sampleRate);  eqPultecDip.prepare (sampleRate);
-    eqMid.prepare (sampleRate);  eqHigh.prepare (sampleRate);
 
     vocalMicModeler.prepare (sampleRate);
-    analogStage.prepare (samplesPerBlock);
-    compressor.prepare (sampleRate);
+    consoleChain.prepare (sampleRate, samplesPerBlock);
     acousticEngine.prepare (sampleRate, samplesPerBlock);
     chamberScratch.setSize (2, samplesPerBlock);
 
-    setLatencySamples (analogStage.getLatencySamples());
-    updateFilters();
+    setLatencySamples (consoleChain.getLatencySamples());
+    updateFiltersAndChain();
 }
 
 void BenBocazStudioProProcessor::releaseResources() {}
@@ -125,95 +145,103 @@ bool BenBocazStudioProProcessor::isBusesLayoutSupported (const BusesLayout& layo
     return inSet == juce::AudioChannelSet::stereo() || inSet == juce::AudioChannelSet::mono();
 }
 
-void BenBocazStudioProProcessor::updateFilters()
+void BenBocazStudioProProcessor::updateFiltersAndChain()
 {
     const int vSrc = static_cast<int> (apvts.getRawParameterValue ("vocalSrcMic")->load());
     const int vTgt = static_cast<int> (apvts.getRawParameterValue ("vocalTgtMic")->load());
     vocalMicModeler.updateCurves (vSrc, vTgt);
 
+    // Respuesta acústica física de cada fuente (Monitores, Guitarra Mono/Estéreo, Bajo)
     const int srcIdx = static_cast<int> (apvts.getRawParameterValue ("source")->load());
     const int monIdx = static_cast<int> (apvts.getRawParameterValue ("monitorType")->load());
-    if (srcIdx == 3)
+    if (srcIdx == 3) // Monitors (Swedien)
     {
         if (monIdx == 0)      { srcHpf.setHighPass (48.0f);  srcLpf.setLowPass (16500.0f); srcMid.setPeak (2200.0f, 1.5f, 1.0f); }
         else if (monIdx == 1) { srcHpf.setHighPass (115.0f); srcLpf.setLowPass (10200.0f); srcMid.setPeak (1750.0f, 4.0f, 1.1f); }
         else                  { srcHpf.setHighPass (82.0f);  srcLpf.setLowPass (13800.0f); srcMid.setPeak (3100.0f, 3.0f, 1.3f); }
+    }
+    else if (srcIdx == 4) // Guitar Cab (Mono 1x12/2x12)
+    {
+        srcHpf.setHighPass (88.0f, 0.75f);
+        srcLpf.setLowPass (6200.0f, 0.85f);
+        srcMid.setPeak (1450.0f, 2.8f, 1.1f);
+    }
+    else if (srcIdx == 5) // Guitar Cab (Stereo 2x12 Open Back)
+    {
+        srcHpf.setHighPass (76.0f, 0.70f);
+        srcLpf.setLowPass (7400.0f, 0.75f);
+        srcMid.setPeak (2100.0f, 2.2f, 0.95f);
+    }
+    else if (srcIdx == 6) // Bass Amp (4x10 + 1x15 Low End)
+    {
+        srcHpf.setHighPass (34.0f, 0.80f);
+        srcLpf.setLowPass (4200.0f, 0.80f);
+        srcMid.setPeak (110.0f, 3.2f, 0.90f);
     }
     else
     {
         srcHpf.setBypass(); srcLpf.setBypass(); srcMid.setBypass();
     }
 
-    const int eqType = static_cast<int> (apvts.getRawParameterValue ("eqType")->load());
-    const float hpf  = apvts.getRawParameterValue ("eqHpf")->load();
-    const float low  = apvts.getRawParameterValue ("eqLow")->load();
-    const float mid  = apvts.getRawParameterValue ("eqMid")->load();
-    const float high = apvts.getRawParameterValue ("eqHigh")->load();
+    // Actualizar EQ con frecuencias reales + perfil de válvula sincronizado
+    const int eqType      = static_cast<int> (apvts.getRawParameterValue ("eqType")->load());
+    const bool tubeSync   = apvts.getRawParameterValue ("eqTubeSync")->load() >= 0.5f;
+    const int tubeModel   = static_cast<int> (apvts.getRawParameterValue ("eqTubeModel")->load());
+    const float hpf       = apvts.getRawParameterValue ("eqHpf")->load();
+    const int lowFreqIdx  = static_cast<int> (apvts.getRawParameterValue ("eqLowFreq")->load());
+    const float low       = apvts.getRawParameterValue ("eqLow")->load();
+    const int midFreqIdx  = static_cast<int> (apvts.getRawParameterValue ("eqMidFreq")->load());
+    const float mid       = apvts.getRawParameterValue ("eqMid")->load();
+    const int highFreqIdx = static_cast<int> (apvts.getRawParameterValue ("eqHighFreq")->load());
+    const float high      = apvts.getRawParameterValue ("eqHigh")->load();
 
-    if (hpf > 22.0f) eqHpf.setHighPass (hpf, 0.7071f);
-    else             eqHpf.setBypass();
+    consoleChain.eqStage.updateParameters (eqType, hpf, lowFreqIdx, low, midFreqIdx, mid, highFreqIdx, high, tubeSync, tubeModel);
 
-    eqPultecDip.setBypass();
+    // Actualizar Compresor Principal y Compresor Paralelo
+    const int compType   = static_cast<int> (apvts.getRawParameterValue ("compType")->load());
+    const float thresh   = apvts.getRawParameterValue ("compThresh")->load();
+    const bool scLink    = apvts.getRawParameterValue ("compScLink")->load() >= 0.5f;
+    const bool scFilter  = apvts.getRawParameterValue ("compScFilter")->load() >= 0.5f;
 
-    if (eqType == 0)
-    {
-        eqLow.setLowShelf (110.0f, low);
-        eqMid.setPeak (1600.0f, mid, 0.85f);
-        eqHigh.setHighShelf (12000.0f, high);
-    }
-    else if (eqType == 1)
-    {
-        eqLow.setLowShelf (65.0f, low * 1.08f);
-        if (low > 0.5f)
-            eqPultecDip.setPeak (185.0f, -low * 0.38f, 1.15f);
-        eqMid.setPeak (1000.0f, mid, 0.65f);
-        eqHigh.setHighShelf (10000.0f, high);
-    }
-    else if (eqType == 2)
-    {
-        const float propQ = 0.9f + std::abs (mid) * 0.08f;
-        eqLow.setLowShelf (100.0f, low);
-        eqMid.setPeak (3000.0f, mid, propQ);
-        eqHigh.setHighShelf (7500.0f, high);
-    }
-    else
-    {
-        eqLow.setLowShelf (80.0f, low);
-        eqMid.setPeak (2200.0f, mid, 1.55f);
-        eqHigh.setHighShelf (8500.0f, high);
-    }
+    consoleChain.mainComp.configure (compType, thresh, scFilter, scLink);
+    consoleChain.parallelComp.configure (3, -24.0f, true, true);
 }
 
-void BenBocazStudioProProcessor::processConsoleEQ (juce::AudioBuffer<float>& buffer)
+void BenBocazStudioProProcessor::processConsoleStage (juce::AudioBuffer<float>& buffer, bool speakerBreakup)
 {
-    if (apvts.getRawParameterValue ("eqOn")->load() < 0.5f) return;
+    const int order     = static_cast<int> (apvts.getRawParameterValue ("chainOrder")->load());
+    const bool parOn    = apvts.getRawParameterValue ("parCompOn")->load() >= 0.5f;
+    const int parRoute  = static_cast<int> (apvts.getRawParameterValue ("parCompRoute")->load());
 
-    eqHpf.processBuffer (buffer);
-    eqLow.processBuffer (buffer);
-    eqPultecDip.processBuffer (buffer);
-    eqMid.processBuffer (buffer);
-    eqHigh.processBuffer (buffer);
-}
+    OversampledConsoleChain::ChainSettings s;
+    s.routingOrder   = (order == 1) ? 1 : 0;
+    s.eqOn           = apvts.getRawParameterValue ("eqOn")->load() >= 0.5f;
+    s.compOn         = apvts.getRawParameterValue ("compOn")->load() >= 0.5f;
+    s.compMix        = apvts.getRawParameterValue ("compMix")->load();
+    s.parallelOn     = parOn && (parRoute == 0);
+    s.parallelAmount = apvts.getRawParameterValue ("parCompAmt")->load();
+    s.tubeDrive      = apvts.getRawParameterValue ("consoleDrive")->load();
+    s.speakerBreakup = speakerBreakup;
 
-void BenBocazStudioProProcessor::processCompressorStage (juce::AudioBuffer<float>& buffer)
-{
-    const bool enabled = apvts.getRawParameterValue ("compOn")->load() >= 0.5f;
-    const int compType = static_cast<int> (apvts.getRawParameterValue ("compType")->load());
-    const float thresh = apvts.getRawParameterValue ("compThresh")->load();
-    compressor.process (buffer, enabled, compType, thresh);
+    consoleChain.processBlock (buffer, s);
 }
 
 void BenBocazStudioProProcessor::processChamberStage (juce::AudioBuffer<float>& buffer)
 {
-    const bool enabled = apvts.getRawParameterValue ("chamberOn")->load() >= 0.5f;
-    const int chType   = static_cast<int> (apvts.getRawParameterValue ("chamberType")->load());
-    const float chMix  = apvts.getRawParameterValue ("chamberMix")->load();
-    const float chDec  = apvts.getRawParameterValue ("chamberDecay")->load();
-    const float chPre  = apvts.getRawParameterValue ("chamberPreDelay")->load();
-    const float chWid  = apvts.getRawParameterValue ("chamberWidth")->load();
+    const bool enabled  = apvts.getRawParameterValue ("chamberOn")->load() >= 0.5f;
+    const int chType    = static_cast<int> (apvts.getRawParameterValue ("chamberType")->load());
+    const float chMix   = apvts.getRawParameterValue ("chamberMix")->load();
+    const float chDec   = apvts.getRawParameterValue ("chamberDecay")->load();
+    const float chPre   = apvts.getRawParameterValue ("chamberPreDelay")->load();
+    const float chWid   = apvts.getRawParameterValue ("chamberWidth")->load();
+    const bool deMud    = apvts.getRawParameterValue ("deMudOn")->load() >= 0.5f;
+    const bool parOn    = apvts.getRawParameterValue ("parCompOn")->load() >= 0.5f;
+    const int parRoute  = static_cast<int> (apvts.getRawParameterValue ("parCompRoute")->load());
+    const float parAmt  = apvts.getRawParameterValue ("parCompAmt")->load();
 
     chamberScratch.setSize (2, buffer.getNumSamples(), false, false, true);
-    acousticEngine.processChamber (buffer, chamberScratch, enabled, chType, chMix, chDec, chPre, chWid);
+    acousticEngine.processChamber (buffer, chamberScratch, enabled, chType, chMix, chDec, chPre, chWid,
+                                   deMud, parOn && (parRoute == 2), parAmt);
 }
 
 void BenBocazStudioProProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -223,7 +251,7 @@ void BenBocazStudioProProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     if (getTotalNumInputChannels() == 1 && buffer.getNumChannels() >= 2)
         buffer.copyFrom (1, 0, buffer, 0, 0, buffer.getNumSamples());
 
-    updateFilters();
+    updateFiltersAndChain();
 
     const bool vocalModOn = apvts.getRawParameterValue ("vocalModOn")->load() >= 0.5f;
     const float vocalIn   = apvts.getRawParameterValue ("vocalInGain")->load();
@@ -232,7 +260,11 @@ void BenBocazStudioProProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     const bool roomOn   = apvts.getRawParameterValue ("roomOn")->load() >= 0.5f;
     const int sourceIdx = static_cast<int> (apvts.getRawParameterValue ("source")->load());
+    const bool parOn    = apvts.getRawParameterValue ("parCompOn")->load() >= 0.5f;
+    const int parRoute  = static_cast<int> (apvts.getRawParameterValue ("parCompRoute")->load());
+    const float parAmt  = apvts.getRawParameterValue ("parCompAmt")->load();
 
+    // Si ROOM ON está apagado, bypass total de sala para usar EQ/Comp/Chambers directo en cualquier pista
     if (roomOn)
     {
         srcHpf.processBuffer (buffer);
@@ -240,15 +272,19 @@ void BenBocazStudioProProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         srcLpf.processBuffer (buffer);
 
         MultiMicRoomConfig cfg;
-        cfg.modeIdx     = static_cast<int> (apvts.getRawParameterValue ("mode")->load());
-        cfg.sourceIdx   = sourceIdx;
-        cfg.roomIdx     = static_cast<int> (apvts.getRawParameterValue ("room")->load());
-        cfg.wallsLive   = static_cast<int> (apvts.getRawParameterValue ("walls")->load());
-        cfg.phaseSafe   = apvts.getRawParameterValue ("phaseAlign")->load() >= 0.5f;
-        cfg.phaseInvert = apvts.getRawParameterValue ("phaseInvert")->load() >= 0.5f;
-        cfg.mainStereo  = apvts.getRawParameterValue ("mainStereo")->load() >= 0.5f;
-        cfg.pairSpread  = apvts.getRawParameterValue ("pairSpread")->load();
-        cfg.deccaWidth  = apvts.getRawParameterValue ("deccaWidth")->load();
+        cfg.modeIdx           = static_cast<int> (apvts.getRawParameterValue ("mode")->load());
+        cfg.sourceIdx         = sourceIdx;
+        cfg.roomIdx           = static_cast<int> (apvts.getRawParameterValue ("room")->load());
+        cfg.wallsLive         = static_cast<int> (apvts.getRawParameterValue ("walls")->load());
+        cfg.phaseSafe         = apvts.getRawParameterValue ("phaseAlign")->load() >= 0.5f;
+        cfg.phaseInvert       = apvts.getRawParameterValue ("phaseInvert")->load() >= 0.5f;
+        cfg.mainStereo        = apvts.getRawParameterValue ("mainStereo")->load() >= 0.5f;
+        cfg.deMudOn           = apvts.getRawParameterValue ("deMudOn")->load() >= 0.5f;
+        cfg.soloStandIdx      = soloStandIndex.load();
+        cfg.pairSpread        = apvts.getRawParameterValue ("pairSpread")->load();
+        cfg.deccaWidth        = apvts.getRawParameterValue ("deccaWidth")->load();
+        cfg.roomParallelCrush = parOn && (parRoute == 1);
+        cfg.roomParallelAmt   = parAmt;
 
         cfg.micX    = { apvts.getRawParameterValue ("mic1X")->load(), apvts.getRawParameterValue ("mic2X")->load(),
                         apvts.getRawParameterValue ("mic3X")->load(), apvts.getRawParameterValue ("mic4X")->load() };
@@ -260,13 +296,18 @@ void BenBocazStudioProProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         acousticEngine.processMultiMicRoom (buffer, cfg);
     }
 
-    const float drive = apvts.getRawParameterValue ("consoleDrive")->load();
-    analogStage.process (buffer, drive, roomOn && sourceIdx == 3);
-
+    const bool hasSpeaker = roomOn && (sourceIdx >= 3);
     const int order = static_cast<int> (apvts.getRawParameterValue ("chainOrder")->load());
-    if (order == 0)      { processConsoleEQ (buffer); processCompressorStage (buffer); processChamberStage (buffer); }
-    else if (order == 1) { processCompressorStage (buffer); processConsoleEQ (buffer); processChamberStage (buffer); }
-    else                 { processChamberStage (buffer); processCompressorStage (buffer); processConsoleEQ (buffer); }
+    if (order == 2)
+    {
+        processChamberStage (buffer);
+        processConsoleStage (buffer, hasSpeaker);
+    }
+    else
+    {
+        processConsoleStage (buffer, hasSpeaker);
+        processChamberStage (buffer);
+    }
 
     const float outGain = juce::Decibels::decibelsToGain (apvts.getRawParameterValue ("outputGain")->load());
     buffer.applyGain (outGain);

@@ -1,6 +1,7 @@
 #pragma once
 #include "PluginProcessor.h"
 #include <array>
+#include <functional>
 
 class RusticStudioLookAndFeel : public juce::LookAndFeel_V4
 {
@@ -65,16 +66,20 @@ public:
     void setShowTipsOverlay (bool b) { showTipsOverlay = b; repaint(); }
     bool isShowingTipsOverlay() const { return showTipsOverlay; }
 
+    void setSelectedStand (int idx);
     int getSelectedStand() const { return selectedStand; }
     void centerStand (int idx);
+
+    std::function<void (int)> onSelectedStandChanged;
 
 private:
     void timerCallback() override { repaint(); }
 
     juce::Point<float> getStandBasePos (int idx, juce::Rectangle<float> area) const;
+    juce::Rectangle<float> getStandTagRect (int idx, juce::Rectangle<float> area) const;
     float getStandScale (int idx) const;
     float getStandVisualHeight (int idx, float scale) const;
-    int findClosestStand (juce::Point<float> pt, juce::Rectangle<float> area, float& outMinDist) const;
+    int findTargetStand (juce::Point<float> pt, juce::Rectangle<float> area, float& outMinDist, bool preferSelected) const;
     void updateStandFromBasePoint (int idx, juce::Point<float> targetBase, juce::Rectangle<float> area);
     void drawAmpFallback (juce::Graphics& g, float cx, float floorY, int sourceIdx, float scale, float alpha) const;
     void drawTipsOverlay (juce::Graphics& g, juce::Rectangle<float> area, int sourceIdx) const;
@@ -106,11 +111,13 @@ public:
 
 private:
     void loadEmbeddedImages();
-    void setupKnob (juce::Slider& slider, juce::Label& label, const juce::String& text, juce::Colour accent = juce::Colour (0xffe5a94c));
+    void setupKnob (juce::Slider& slider, juce::Label& label, const juce::String& text);
+    void setupStandKnob (juce::Slider& slider, juce::TextButton& selectBtn, const juce::String& text, int standIdx);
     void setupCombo (juce::ComboBox& box, const juce::StringArray& items, juce::Label& label, const juce::String& text);
     void openIRFileChooser();
     void applyFactoryPreset (int presetIdx);
     void updateSoloButtonsUI();
+    void updateSelectedStandButtonsUI (int selIdx);
 
     BenBocazStudioProProcessor& audioProcessor;
     RusticStudioLookAndFeel rusticLAF;
@@ -119,11 +126,9 @@ private:
     juce::Image chassisImage;
     bool stageExpanded = false;
 
-    // Presets y Life Hacks en barra superior
+    // Barra superior de Presets y Precisión
     juce::Label presetLbl;
     juce::ComboBox presetBox;
-    juce::TextButton roomGlueBtn { "ROOM GLUE" };
-    juce::ToggleButton deMudBtn  { "DE-MUD" };
 
     juce::ToggleButton phaseAlignBtn { "PHASE SAFE" };
     juce::ToggleButton phaseInvBtn   { "POLARITY INV" };
@@ -132,20 +137,20 @@ private:
     juce::ToggleButton roomOnBtn     { "ROOM ON" };
     juce::ToggleButton chamberOnBtn  { "ON" };
     juce::ToggleButton eqOnBtn       { "EQ ON" };
-    juce::ToggleButton eqTubeSyncBtn { "TUBE SYNC" };
     juce::ToggleButton compOnBtn     { "COMP ON" };
     juce::ToggleButton compScLinkBtn { "SC LINK" };
     juce::ToggleButton compScFiltBtn { "SC FILTER" };
     juce::ToggleButton parCompOnBtn  { "PAR CRUSH" };
 
-    // Botones de Precisión, Tips y Vista Expandida sobre el escenario
+    // Botones de Precisión, Tips y Vista Expandida
     juce::ToggleButton snapCenterBtn { "SNAP CENTER" };
     juce::ToggleButton link34Btn     { "LINK 3+4" };
     juce::TextButton centerSelBtn    { "CENTER MIC" };
     juce::TextButton tipsBtn         { "i  TIPS" };
     juce::TextButton expandStageBtn  { "EXPAND STAGE" };
 
-    // Botones Solo por Atril (S)
+    // Selección rápida y Solo por Atril
+    juce::TextButton mic1SelBtn { "1: MAIN" }, mic2SelBtn { "2: MID" }, mic3SelBtn { "3: AIR" }, mic4SelBtn { "4: DECCA" };
     juce::TextButton solo1Btn { "S" }, solo2Btn { "S" }, solo3Btn { "S" }, solo4Btn { "S" };
 
     juce::TextButton vuModeBtn { "VU: OUT" };
@@ -170,7 +175,6 @@ private:
     juce::Slider compThreshSlider, compMixSlider, parAmtSlider, outGainSlider;
 
     juce::Label vocalInLbl, vocalOutLbl, driveLbl;
-    juce::Label mic1GainLbl, mic2GainLbl, mic3GainLbl, mic4GainLbl;
     juce::Label pairWidthLbl, deccaWidthLbl;
     juce::Label chMixLbl, chDecayLbl, chPreLbl, chWidthLbl;
     juce::Label eqHpfLbl, eqLowLbl, eqMidLbl, eqHighLbl;
@@ -180,8 +184,8 @@ private:
     using SliderAtt = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAtt = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
-    std::unique_ptr<ButtonAtt> deMudAtt, phaseAlignAtt, phaseInvAtt, vocalModAtt, mainStereoAtt, roomOnAtt;
-    std::unique_ptr<ButtonAtt> chamberOnAtt, eqOnAtt, eqTubeSyncAtt, compOnAtt, compScLinkAtt, compScFiltAtt, parCompOnAtt;
+    std::unique_ptr<ButtonAtt> phaseAlignAtt, phaseInvAtt, vocalModAtt, mainStereoAtt, roomOnAtt;
+    std::unique_ptr<ButtonAtt> chamberOnAtt, eqOnAtt, compOnAtt, compScLinkAtt, compScFiltAtt, parCompOnAtt;
 
     std::unique_ptr<ComboAtt>  modeAtt, chainAtt, vocalSrcAtt, vocalTgtAtt;
     std::unique_ptr<ComboAtt>  sourceAtt, monitorAtt, roomAtt, wallsAtt;

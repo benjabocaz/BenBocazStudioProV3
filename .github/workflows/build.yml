@@ -1,4 +1,4 @@
-name: Build macOS Audio Unit
+name: Build Ben Bocaz Studio Pro (AU)
 
 on:
   push:
@@ -7,23 +7,22 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-au:
-    runs-on: macos-14
-
+  build-macos-au:
+    runs-on: macos-15-intel
     steps:
-      - name: Checkout branch
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      - uses: actions/checkout@v6
 
       - name: Configure CMake
-        run: cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64"
 
-      - name: Build AU target
-        run: cmake --build build --target BenBocazStudioPro_AU --config Release -j$(sysctl -n hw.ncpu)
+      - name: Build AU Plugin
+        run: cmake --build build --config Release --target BenBocazStudioPro_AU --parallel
 
-      - name: Upload AU artifact
-        uses: actions/upload-artifact@v4
+      - name: Ad-Hoc Codesign AU
+        run: codesign --force --deep --sign - "build/BenBocazStudioPro_artefacts/Release/AU/Ben Bocaz Studio Pro.component"
+
+      - name: Upload AU Artifact
+        uses: actions/upload-artifact@v6
         with:
-          name: BenBocazStudioPro-AU-macOS
+          name: BenBocazStudioPro-AU
           path: build/BenBocazStudioPro_artefacts/Release/AU/Ben Bocaz Studio Pro.component

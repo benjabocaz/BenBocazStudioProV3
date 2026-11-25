@@ -1,120 +1,29 @@
-name: Build Ben Bocaz Studio Pro (AU)
+name: Build macOS Audio Unit
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - "**"
   workflow_dispatch:
 
 jobs:
-  build-macos-au:
-    runs-on: macos-15-intel
+  build-au:
+    runs-on: macos-15
+
     steps:
-      - uses: actions/checkout@v6
-
-      - name: Process & Chroma-Key Assets (Python + Pillow + NumPy)
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -m venv .asset_venv
-          .asset_venv/bin/pip install --quiet pillow numpy
-
-          .asset_venv/bin/python - << 'PYEOF'
-          import os, sys
-          import numpy as np
-          from PIL import Image
-
-          assets_dir = "Assets"
-          if not os.path.isdir(assets_dir):
-              for d in os.listdir("."):
-                  if d.lower() == "assets" and os.path.isdir(d):
-                      os.rename(d, assets_dir)
-                      break
-
-          if not os.path.isdir(assets_dir):
-              sys.exit("ERROR: No existe la carpeta Assets/ en el repositorio.")
-
-          valid_exts = {".jpg", ".jpeg", ".png", ".webp"}
-          files = sorted(f for f in os.listdir(assets_dir)
-                         if not f.startswith(".") and os.path.splitext(f)[1].lower() in valid_exts)
-
-          if not files:
-              sys.exit("ERROR: La carpeta Assets/ no tiene imágenes.")
-
-          def chroma_key_sprite(img: Image.Image) -> Image.Image:
-              arr = np.array(img.convert("RGBA"), dtype=np.float32) / 255.0
-              h, w, _ = arr.shape
-              r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-              max_rb = np.maximum(r, b)
-              g_excess = g - max_rb
-
-              lo, hi = 0.06, 0.22
-              alpha = 1.0 - np.clip((g_excess - lo) / (hi - lo), 0.0, 1.0)
-              green_bg = (g > r * 1.15) & (g > b * 1.15) & (g > 0.22) & (g_excess > 0.12)
-              alpha = np.where(green_bg, 0.0, alpha)
-
-              corner_h, corner_w = max(1, int(h * 0.075)), max(1, int(w * 0.075))
-              alpha[h - corner_h:, w - corner_w:] = 0.0
-
-              arr[..., 1] = np.where(g > max_rb, max_rb + (g - max_rb) * 0.12, g)
-              arr[..., 3] = alpha
-
-              out = Image.fromarray(np.clip(arr * 255.0, 0, 255).astype(np.uint8), "RGBA")
-              mask = (arr[..., 3] > 0.06)
-              ys, xs = np.where(mask)
-              if len(xs) > 0 and len(ys) > 0:
-                  pad = 6
-                  x0 = max(0, int(xs.min()) - pad)
-                  y0 = max(0, int(ys.min()) - pad)
-                  x1 = min(w, int(xs.max()) + pad + 1)
-                  y1 = min(h, int(ys.max()) + pad + 1)
-                  out = out.crop((x0, y0, x1, y1))
-
-              out.thumbnail((720, 720), Image.Resampling.LANCZOS)
-              return out
-
-          processed = []
-          for fname in files:
-              src_path = os.path.join(assets_dir, fname)
-              stem = os.path.splitext(fname)[0].lower()
-              dst_path = os.path.join(assets_dir, f"{stem}.png")
-
-              img = Image.open(src_path)
-              is_sprite = stem.startswith("src_") or stem.startswith("mic_")
-
-              if is_sprite:
-                  out = chroma_key_sprite(img)
-                  kind = "SPRITE RGBA (Chroma-Key)"
-              else:
-                  out = img.convert("RGB")
-                  out.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
-                  kind = "BACKGROUND RGB"
-
-              tmp_path = os.path.join(assets_dir, f"{stem}__tmp.png")
-              out.save(tmp_path, format="PNG", optimize=True)
-              if os.path.exists(src_path):
-                  os.remove(src_path)
-              os.replace(tmp_path, dst_path)
-              processed.append((os.path.basename(dst_path), out.size, kind))
-
-          print("=== ASSETS PROCESADOS CORRECTAMENTE ===")
-          for name, size, kind in processed:
-              print(f"  [OK] {name:<24} {size[0]}x{size[1]:<6} {kind}")
-          PYEOF
-
-          rm -rf .asset_venv
-          ls -lh Assets
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64"
+        run: cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build AU Plugin
-        run: cmake --build build --config Release --target BenBocazStudioPro_AU --parallel
+      - name: Build AU target
+        run: cmake --build build --target BenBocazStudioPro_AU --config Release -j$(sysctl -n hw.ncpu)
 
-      - name: Ad-Hoc Codesign AU
-        run: codesign --force --deep --sign - "build/BenBocazStudioPro_artefacts/Release/AU/Ben Bocaz Studio Pro.component"
-
-      - name: Upload AU Artifact
-        uses: actions/upload-artifact@v6
+      - name: Upload AU artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: BenBocazStudioPro-AU
+          name: BenBocazStudioPro-AU-macOS
           path: build/BenBocazStudioPro_artefacts/Release/AU/Ben Bocaz Studio Pro.component

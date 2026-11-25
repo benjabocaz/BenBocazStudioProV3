@@ -54,6 +54,7 @@ private:
     double currentSampleRate = 44100.0;
 
     StereoBiquad srcHpf, srcLpf, srcMid;
+    CabinetVoicingStage cabVoicing;
 
     VocalMicModeler vocalMicModeler;
     OversampledConsoleChain consoleChain;

@@ -8,35 +8,6 @@
 #include <algorithm>
 #include <atomic>
 
-class SimpleAllPass
-{
-public:
-    void prepare (size_t delaySamples)
-    {
-        size_t sz = 1;
-        while (sz < delaySamples + 8) sz <<= 1;
-        buf.assign (sz, 0.0f);
-        mask = sz - 1;
-        delay = delaySamples;
-        pos = 0;
-    }
-
-    void reset() { std::fill (buf.begin(), buf.end(), 0.0f); pos = 0; }
-
-    inline float process (float x, float g = 0.52f) noexcept
-    {
-        const float d = buf[(pos - delay) & mask];
-        const float v = x - g * d;
-        buf[pos] = v;
-        pos = (pos + 1) & mask;
-        return d + g * v;
-    }
-
-private:
-    std::vector<float> buf;
-    size_t mask = 0, delay = 1, pos = 0;
-};
-
 class HadamardFDN
 {
 public:
@@ -155,13 +126,12 @@ struct MultiMicRoomConfig
     float pairSpread = 1.0f;
     float deccaWidth = 1.0f;
 
-    // Compresión paralela derivada solo a los micrófonos de ambiente (MID, AIR, DECCA)
     bool roomParallelCrush = false;
     float roomParallelAmt  = 0.45f;
 
     std::array<float, 4> micX    { 0.0f, -0.42f, 0.42f, 0.05f };
     std::array<float, 4> micY    { 0.18f, 0.54f, 0.76f, 0.86f };
-    std::array<float, 4> micGain { 1.0f,  0.45f, 0.35f, 0.30f };
+    std::array<float, 4> micGain { 1.0f,  0.25f, 0.0f,  0.0f };
 };
 
 class AcousticEngine
@@ -184,17 +154,12 @@ public:
         chamberFdn.prepare (sr);
         roomAmbComp.prepare (sr);
 
-        midPhaseHpf.prepare (sr);   midPhaseHpf.setHighPass (150.0f, 0.7071f);
-        airPhaseHpf.prepare (sr);   airPhaseHpf.setHighPass (240.0f, 0.7071f);
-        deccaPhaseHpf.prepare (sr); deccaPhaseHpf.setHighPass (120.0f, 0.7071f);
+        midPhaseHpf.prepare (sr);   midPhaseHpf.setHighPass (105.0f, 0.7071f);
+        airPhaseHpf.prepare (sr);   airPhaseHpf.setHighPass (165.0f, 0.7071f);
+        deccaPhaseHpf.prepare (sr); deccaPhaseHpf.setHighPass (90.0f, 0.7071f);
 
         deMudHpf.prepare (sr);      deMudHpf.setHighPass (165.0f, 0.7071f);
         deMudDip.prepare (sr);      deMudDip.setPeak (275.0f, -4.5f, 1.1f);
-
-        apMidL.prepare (static_cast<size_t> (sr * 0.0053));
-        apMidR.prepare (static_cast<size_t> (sr * 0.0067));
-        apAirL.prepare (static_cast<size_t> (sr * 0.0113));
-        apAirR.prepare (static_cast<size_t> (sr * 0.0137));
 
         juce::dsp::ProcessSpec spec;
         spec.sampleRate = sr;
@@ -214,7 +179,6 @@ public:
         roomFdn.reset(); chamberFdn.reset(); roomAmbComp.reset();
         midPhaseHpf.reset(); airPhaseHpf.reset(); deccaPhaseHpf.reset();
         deMudHpf.reset(); deMudDip.reset();
-        apMidL.reset(); apMidR.reset(); apAirL.reset(); apAirR.reset();
         preDelay.reset(); customConvolver.reset();
     }
 
@@ -270,22 +234,13 @@ public:
             panL[s] = std::cos (ang) * 1.414f;
             panR[s] = std::sin (ang) * 1.414f;
 
-            if (cfg.phaseSafe)
-            {
-                if (s == 0)
-                    delaySamples[s] = 0.0f;
-                else
-                {
-                    const float minHaasSec = (s == 2) ? 0.024f : 0.016f;
-                    const float physicalSec = distMeters[s] / speed;
-                    delaySamples[s] = std::max (minHaasSec, physicalSec) * static_cast<float> (sr);
-                }
-            }
-            else
-            {
-                const float relDist = std::max (0.0f, distMeters[s] - distMeters[0]);
-                delaySamples[s] = (relDist / speed) * static_cast<float> (sr);
-            }
+            // Retardo físico real por distancia entre atriles:
+            // - Con Phase Safe OFF: retardo directo según distancia respecto al atril 1.
+            // - Con Phase Safe ON: mantiene retardo real de distancia pero más contenido para evitar comb agresivo.
+            const float relDist = std::max (0.0f, distMeters[s] - distMeters[0]);
+            const float rawDelaySec = relDist / speed;
+            const float delaySec = cfg.phaseSafe ? (rawDelaySec * 0.65f) : rawDelaySec;
+            delaySamples[s] = delaySec * static_cast<float> (sr);
         }
 
         const size_t erNear = static_cast<size_t> (0.0145f * sr);
@@ -308,13 +263,12 @@ public:
             const float dryL = left[i];
             const float dryR = right[i];
 
-            // Fuentes Mono (Vocals, Guitar Cab Mono, Bass Amp) vs Estéreo
             float srcL = dryL, srcR = dryR;
             if (cfg.sourceIdx == 0 || cfg.sourceIdx == 4 || cfg.sourceIdx == 6)
             {
                 srcL = srcR = 0.5f * (dryL + dryR);
             }
-            else if (cfg.sourceIdx == 3) // Monitors Swedien Acoustic Crosstalk
+            else if (cfg.sourceIdx == 3)
             {
                 srcL = dryL * 0.82f + dryR * 0.18f;
                 srcR = dryR * 0.82f + dryL * 0.18f;
@@ -339,7 +293,7 @@ public:
             float mainL = 0.0f, mainR = 0.0f;
             float ambL  = 0.0f, ambR  = 0.0f;
 
-            // ATRIL 1: MAIN
+            // ATRIL 1: MAIN (refleja distancia y retardo real al alejarse de la fuente)
             if (activeGain[0] > 0.001f)
             {
                 const float g = activeGain[0];
@@ -347,8 +301,9 @@ public:
                 const float dirW = juce::jmap (yDist, 0.0f, 1.0f, 0.94f, 0.35f);
                 const float ambW = juce::jmap (yDist, 0.0f, 1.0f, 0.14f, 0.65f);
 
-                float dirL = cfg.phaseSafe ? srcL : readFrac (erBufL, delaySamples[0]);
-                float dirR = cfg.phaseSafe ? srcR : readFrac (erBufR, delaySamples[0]);
+                const float mainDelay = (distMeters[0] / speed) * static_cast<float> (sr);
+                float dirL = readFrac (erBufL, mainDelay);
+                float dirR = readFrac (erBufR, mainDelay);
 
                 float sL = dirL * dirW + (erL * 0.7f + fdnL * 0.5f) * ambW;
                 float sR = dirR * dirW + (erR * 0.7f + fdnR * 0.5f) * ambW;
@@ -370,8 +325,8 @@ public:
 
                 if (cfg.phaseSafe)
                 {
-                    mL = apMidL.process (midPhaseHpf.processSample (0, mL));
-                    mR = apMidR.process (midPhaseHpf.processSample (1, mR));
+                    mL = midPhaseHpf.processSample (0, mL);
+                    mR = midPhaseHpf.processSample (1, mR);
                 }
 
                 const float mid  = 0.5f * (mL + mR);
@@ -394,8 +349,8 @@ public:
 
                 if (cfg.phaseSafe)
                 {
-                    aL = apAirL.process (airPhaseHpf.processSample (0, aL));
-                    aR = apAirR.process (airPhaseHpf.processSample (1, aR));
+                    aL = airPhaseHpf.processSample (0, aL);
+                    aR = airPhaseHpf.processSample (1, aR);
                 }
 
                 const float mid  = 0.5f * (aL + aR);
@@ -428,14 +383,12 @@ public:
                 ambR += (mid - side) * panR[3] * g;
             }
 
-            // Life Hack: DE-MUD (limpia graves/medios-bajos acumulados en ambiente)
             if (cfg.deMudOn)
             {
                 ambL = deMudDip.processSample (0, deMudHpf.processSample (0, ambL));
                 ambR = deMudDip.processSample (1, deMudHpf.processSample (1, ambR));
             }
 
-            // Derivación de Compresión Paralela solo hacia los micrófonos de ambiente
             if (cfg.roomParallelCrush && cfg.roomParallelAmt > 0.001f)
                 roomAmbComp.processStereoSample (ambL, ambR, cfg.roomParallelAmt, dummyGr);
 
@@ -560,7 +513,6 @@ private:
 
     StereoBiquad midPhaseHpf, airPhaseHpf, deccaPhaseHpf;
     StereoBiquad deMudHpf, deMudDip;
-    SimpleAllPass apMidL, apMidR, apAirL, apAirR;
     HadamardFDN roomFdn, chamberFdn;
     VintageCompressor roomAmbComp;
 

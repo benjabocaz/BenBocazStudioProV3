@@ -260,9 +260,9 @@ juce::Rectangle<float> Studio4MicStagePad::getStandTagRect (int idx, juce::Recta
     const auto base = getStandBasePos (idx, area);
     const float sc  = getStandScale (idx);
     const float vh  = getStandVisualHeight (idx, sc);
-    const float tagW = (idx == 0) ? 96.0f : 74.0f;
-    const float tagY = std::max (area.getY() + 26.0f, base.y - vh - 13.0f);
-    return { base.x - tagW * 0.5f, tagY, tagW, 14.0f };
+    const float tagW = (idx == 0) ? 102.0f : 80.0f;
+    const float tagY = std::max (area.getY() + 26.0f, base.y - vh - 14.0f);
+    return { base.x - tagW * 0.5f, tagY, tagW, 15.0f };
 }
 
 int Studio4MicStagePad::findTargetStand (juce::Point<float> pt, juce::Rectangle<float> area, float& outMinDist, bool preferSelected) const
@@ -499,12 +499,12 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     if (sourceIdx == 3)
         srcLbl = (monitorIdx == 0 ? "MONITORS: ALTEC" : (monitorIdx == 1 ? "MONITORS: NS-10" : "MONITORS: JBL PA"));
 
-    g.setColour (juce::Colour (0xff120d09).withAlpha (0.82f * stageAlpha));
-    g.fillRoundedRectangle (srcFloorX - 66.0f, area.getY() + 28.0f, 132.0f, 14.5f, 3.5f);
-    g.setColour (juce::Colour (0xfff2e6d0).withAlpha (0.88f * stageAlpha));
-    g.drawRoundedRectangle (srcFloorX - 66.0f, area.getY() + 28.0f, 132.0f, 14.5f, 3.5f, 0.9f);
-    g.setFont (juce::Font (juce::FontOptions (8.2f).withStyle ("Bold")));
-    g.drawText (srcLbl, static_cast<int> (srcFloorX - 66), static_cast<int> (area.getY() + 28), 132, 15, juce::Justification::centred);
+    g.setColour (juce::Colour (0xff120d09).withAlpha (0.86f * stageAlpha));
+    g.fillRoundedRectangle (srcFloorX - 70.0f, area.getY() + 28.0f, 140.0f, 15.5f, 3.5f);
+    g.setColour (juce::Colour (0xfff2e6d0).withAlpha (0.92f * stageAlpha));
+    g.drawRoundedRectangle (srcFloorX - 70.0f, area.getY() + 28.0f, 140.0f, 15.5f, 3.5f, 0.9f);
+    g.setFont (juce::Font (juce::FontOptions (8.5f).withStyle ("Bold")));
+    g.drawText (srcLbl, static_cast<int> (srcFloorX - 70), static_cast<int> (area.getY() + 28), 140, 16, juce::Justification::centred);
 
     if (linkAirDecca && roomIsOn)
     {
@@ -609,11 +609,11 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
         tag += " " + juce::String (distM, 1) + "m";
 
         const auto tagRect = getStandTagRect (idx, area);
-        g.setColour (juce::Colour (0xff120d0a).withAlpha (0.86f * stageAlpha));
+        g.setColour (juce::Colour (0xff120d0a).withAlpha (0.92f * stageAlpha));
         g.fillRoundedRectangle (tagRect, 3.0f);
-        g.setColour (col.withAlpha (active ? 1.0f : 0.85f * alpha));
-        g.drawRoundedRectangle (tagRect, 3.0f, active ? 1.3f : 0.7f);
-        g.setFont (juce::Font (juce::FontOptions (8.1f).withStyle ("Bold")));
+        g.setColour (col.withAlpha (active ? 1.0f : 0.90f * alpha));
+        g.drawRoundedRectangle (tagRect, 3.0f, active ? 1.4f : 0.85f);
+        g.setFont (juce::Font (juce::FontOptions (8.5f).withStyle ("Bold")));
         g.drawText (tag, tagRect.toNearestInt(), juce::Justification::centred);
     }
 
@@ -628,13 +628,13 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
         if (selX < -0.02f) panStr = juce::String (std::abs (selX) * 100.0f, 0) + "% L";
         else if (selX > 0.02f) panStr = juce::String (selX * 100.0f, 0) + "% R";
 
-        juce::Rectangle<float> hud (area.getRight() - 186.0f, area.getBottom() - 42.0f, 178.0f, 35.0f);
-        g.setColour (juce::Colour (0xff120d09).withAlpha (0.84f));
+        juce::Rectangle<float> hud (area.getRight() - 190.0f, area.getBottom() - 42.0f, 182.0f, 35.0f);
+        g.setColour (juce::Colour (0xff120d09).withAlpha (0.88f));
         g.fillRoundedRectangle (hud, 4.0f);
-        g.setColour (cols[static_cast<size_t> (selectedStand)].withAlpha (0.8f));
+        g.setColour (cols[static_cast<size_t> (selectedStand)].withAlpha (0.85f));
         g.drawRoundedRectangle (hud, 4.0f, 1.0f);
 
-        g.setFont (juce::Font (juce::FontOptions (8.4f).withStyle ("Bold")));
+        g.setFont (juce::Font (juce::FontOptions (8.6f).withStyle ("Bold")));
         g.drawText ("SELECTED: " + juce::String (selectedStand + 1) + ":" + baseNames[static_cast<size_t> (selectedStand)],
                     hud.reduced (7.0f, 3.0f).removeFromTop (14.0f), juce::Justification::centredLeft);
         g.setColour (juce::Colour (0xffe8dcc6));
@@ -651,19 +651,19 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     g.drawRoundedRectangle (area, 6.0f, (roomIsOn && wallsLive) ? 2.0f : 1.4f);
 
     auto topBar = area.reduced (8.0f).removeFromTop (16.0f);
-    g.setColour (juce::Colour (0xff140f0b).withAlpha (0.82f));
+    g.setColour (juce::Colour (0xff140f0b).withAlpha (0.85f));
     g.fillRoundedRectangle (topBar.expanded (4.0f, 2.0f), 3.0f);
 
     g.setColour (juce::Colour (0xfff4d08c).withAlpha (roomIsOn ? 1.0f : 0.55f));
-    g.setFont (juce::Font (juce::FontOptions (9.6f).withStyle ("Bold")));
-    juce::String roomTitle = (roomIdx == 0 ? "STUDIO A (SHANGRI-LA)" : "STUDIO B (CANYON WOOD)");
-    roomTitle += (wallsLive ? "  |  LIVE" : "  |  DAMPED");
+    g.setFont (juce::Font (juce::FontOptions (9.8f).withStyle ("Bold")));
+    juce::String roomTitle = (roomIdx == 0 ? "STUDIO A (SHANGRI-LA)" : "STUDIO B (CANYON)");
+    roomTitle += (wallsLive ? "  |  LIVE WOOD" : "  |  TIGHT");
     g.drawText (roomTitle, topBar, juce::Justification::centredLeft);
 
     if (! roomIsOn)
     {
         g.setColour (juce::Colour (0xffc99e6b));
-        g.drawText ("ROOM BYPASSED (DIRECT CHANNEL STRIP)", topBar, juce::Justification::centredRight);
+        g.drawText ("ROOM BYPASSED", topBar, juce::Justification::centredRight);
     }
     else
     {

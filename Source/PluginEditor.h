@@ -88,8 +88,8 @@ private:
     juce::AudioProcessorValueTreeState& apvts;
     juce::Image shangriLaImg;
     juce::Image canyonImg;
-    std::array<juce::Image, 7> sourceImgs; // 0..6
-    std::array<juce::Image, 4> micImgs;    // 0: Main Mono, 1: Main X-Y, 2: Stereo Pair, 3: Decca
+    std::array<juce::Image, 7> sourceImgs;
+    std::array<juce::Image, 4> micImgs;
 
     int selectedStand = 0;
     int hoveredStand = -1;
@@ -126,7 +126,6 @@ private:
     juce::Image chassisImage;
     bool stageExpanded = false;
 
-    // Barra superior de Presets y Precisión
     juce::Label presetLbl;
     juce::ComboBox presetBox;
 
@@ -142,14 +141,12 @@ private:
     juce::ToggleButton compScFiltBtn { "SC FILTER" };
     juce::ToggleButton parCompOnBtn  { "PAR CRUSH" };
 
-    // Botones de Precisión, Tips y Vista Expandida
     juce::ToggleButton snapCenterBtn { "SNAP CENTER" };
     juce::ToggleButton link34Btn     { "LINK 3+4" };
     juce::TextButton centerSelBtn    { "CENTER MIC" };
     juce::TextButton tipsBtn         { "i  TIPS" };
     juce::TextButton expandStageBtn  { "EXPAND STAGE" };
 
-    // Selección rápida y Solo por Atril
     juce::TextButton mic1SelBtn { "1: MAIN" }, mic2SelBtn { "2: MID" }, mic3SelBtn { "3: AIR" }, mic4SelBtn { "4: DECCA" };
     juce::TextButton solo1Btn { "S" }, solo2Btn { "S" }, solo3Btn { "S" }, solo4Btn { "S" };
 

@@ -149,7 +149,6 @@ void BenBocazStudioProProcessor::updateFiltersAndChain()
     const int vTgt = static_cast<int> (apvts.getRawParameterValue ("vocalTgtMic")->load());
     vocalMicModeler.updateCurves (vSrc, vTgt);
 
-    // Respuesta acústica física de cada fuente (Monitores, Guitarra Mono/Estéreo, Bajo)
     const int srcIdx = static_cast<int> (apvts.getRawParameterValue ("source")->load());
     const int monIdx = static_cast<int> (apvts.getRawParameterValue ("monitorType")->load());
     if (srcIdx == 3) // Monitors (Swedien)
@@ -158,19 +157,19 @@ void BenBocazStudioProProcessor::updateFiltersAndChain()
         else if (monIdx == 1) { srcHpf.setHighPass (115.0f); srcLpf.setLowPass (10200.0f); srcMid.setPeak (1750.0f, 4.0f, 1.1f); }
         else                  { srcHpf.setHighPass (82.0f);  srcLpf.setLowPass (13800.0f); srcMid.setPeak (3100.0f, 3.0f, 1.3f); }
     }
-    else if (srcIdx == 4) // Guitar Cab (Mono 1x12/2x12)
+    else if (srcIdx == 4) // Guitar Cab (Mono)
     {
         srcHpf.setHighPass (88.0f, 0.75f);
         srcLpf.setLowPass (6200.0f, 0.85f);
         srcMid.setPeak (1450.0f, 2.8f, 1.1f);
     }
-    else if (srcIdx == 5) // Guitar Cab (Stereo 2x12 Open Back)
+    else if (srcIdx == 5) // Guitar Cab (Stereo)
     {
         srcHpf.setHighPass (76.0f, 0.70f);
         srcLpf.setLowPass (7400.0f, 0.75f);
         srcMid.setPeak (2100.0f, 2.2f, 0.95f);
     }
-    else if (srcIdx == 6) // Bass Amp (4x10 + 1x15 Low End)
+    else if (srcIdx == 6) // Bass Amp (Low End)
     {
         srcHpf.setHighPass (34.0f, 0.80f);
         srcLpf.setLowPass (4200.0f, 0.80f);
@@ -181,7 +180,6 @@ void BenBocazStudioProProcessor::updateFiltersAndChain()
         srcHpf.setBypass(); srcLpf.setBypass(); srcMid.setBypass();
     }
 
-    // Actualizar EQ con frecuencias reales + circuito de válvula independiente
     const int eqType      = static_cast<int> (apvts.getRawParameterValue ("eqType")->load());
     const int tubeModel   = static_cast<int> (apvts.getRawParameterValue ("eqTubeModel")->load());
     const float hpf       = apvts.getRawParameterValue ("eqHpf")->load();
@@ -194,7 +192,6 @@ void BenBocazStudioProProcessor::updateFiltersAndChain()
 
     consoleChain.eqStage.updateParameters (eqType, hpf, lowFreqIdx, low, midFreqIdx, mid, highFreqIdx, high, false, tubeModel);
 
-    // Actualizar Compresor Principal y Compresor Paralelo
     const int compType   = static_cast<int> (apvts.getRawParameterValue ("compType")->load());
     const float thresh   = apvts.getRawParameterValue ("compThresh")->load();
     const bool scLink    = apvts.getRawParameterValue ("compScLink")->load() >= 0.5f;
@@ -217,6 +214,7 @@ void BenBocazStudioProProcessor::processConsoleStage (juce::AudioBuffer<float>& 
     s.compMix        = apvts.getRawParameterValue ("compMix")->load();
     s.parallelOn     = parOn && (parRoute == 0);
     s.parallelAmount = apvts.getRawParameterValue ("parCompAmt")->load();
+    s.tubeCircuit    = static_cast<int> (apvts.getRawParameterValue ("eqTubeModel")->load());
     s.tubeDrive      = apvts.getRawParameterValue ("consoleDrive")->load();
     s.speakerBreakup = speakerBreakup;
 

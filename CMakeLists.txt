@@ -38,23 +38,25 @@ target_sources(BenBocazStudioPro
 )
 
 file(GLOB PLUGIN_ASSETS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Assets/*.jpg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Assets/*.jpeg"
     "${CMAKE_CURRENT_SOURCE_DIR}/Assets/*.png"
 )
 
-if(NOT PLUGIN_ASSETS)
-    message(FATAL_ERROR "ERROR: No se encontraron archivos PNG procesados en Assets/. Verifica la carpeta Assets/ en tu repositorio.")
+if(PLUGIN_ASSETS)
+    list(LENGTH PLUGIN_ASSETS ASSET_COUNT)
+    message(STATUS "=== INCRUSTANDO ${ASSET_COUNT} ASSETS EN BINARYDATA ===")
+    foreach(asset ${PLUGIN_ASSETS})
+        message(STATUS "  -> Asset: ${asset}")
+    endforeach()
+
+    juce_add_binary_data(BenBocazAssets SOURCES ${PLUGIN_ASSETS})
+    set_target_properties(BenBocazAssets PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
+    target_link_libraries(BenBocazStudioPro PRIVATE BenBocazAssets)
+    target_compile_definitions(BenBocazStudioPro PRIVATE HAS_CUSTOM_ASSETS=1)
+else()
+    message(WARNING "No se encontraron archivos de imagen (.jpg/.jpeg/.png) en Assets/. Se usaran los graficos de respaldo.")
 endif()
-
-list(LENGTH PLUGIN_ASSETS ASSET_COUNT)
-message(STATUS "=== INCRUSTANDO ${ASSET_COUNT} ASSETS PNG EN BINARYDATA ===")
-foreach(asset ${PLUGIN_ASSETS})
-    message(STATUS "  -> Asset: ${asset}")
-endforeach()
-
-juce_add_binary_data(BenBocazAssets SOURCES ${PLUGIN_ASSETS})
-set_target_properties(BenBocazAssets PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
-target_link_libraries(BenBocazStudioPro PRIVATE BenBocazAssets)
-target_compile_definitions(BenBocazStudioPro PRIVATE HAS_CUSTOM_ASSETS=1)
 
 target_compile_definitions(BenBocazStudioPro
     PUBLIC

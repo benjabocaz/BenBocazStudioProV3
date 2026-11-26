@@ -43,7 +43,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProProcessor::
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
         "monitorType", "Monitor", juce::StringArray { "Altec Main", "NS-10 Nearfield", "JBL PA Wedge" }, 0));
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
-        "room", "Studio Room", juce::StringArray { "Studio A (Shangri-La)", "Studio B (Canyon)" }, 0));
+        "room", "Studio Room", juce::StringArray { "Studio A (Shangri-La)", "Studio B (Canyon)", "Volcano" }, 0));
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
         "walls", "Room Walls", juce::StringArray { "Tight / Damped", "Live / Cedar Wood" }, 1));
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
@@ -127,7 +127,7 @@ void BenBocazStudioProProcessor::prepareToPlay (double sampleRate, int samplesPe
     vocalMicModeler.prepare (sampleRate);
     consoleChain.prepare (sampleRate, samplesPerBlock);
     acousticEngine.prepare (sampleRate, samplesPerBlock);
-    chamberScratch.setSize (2, samplesPerBlock);
+    chamberScratch.setSize (2, std::max (1, samplesPerBlock));
 
     setLatencySamples (consoleChain.getLatencySamples());
     updateFiltersAndChain();
@@ -220,7 +220,6 @@ void BenBocazStudioProProcessor::processChamberStage (juce::AudioBuffer<float>& 
     const int parRoute  = static_cast<int> (apvts.getRawParameterValue ("parCompRoute")->load());
     const float parAmt  = apvts.getRawParameterValue ("parCompAmt")->load();
 
-    chamberScratch.setSize (2, buffer.getNumSamples(), false, false, true);
     acousticEngine.processChamber (buffer, chamberScratch, enabled, chType, chMix, chDec, chPre, chWid,
                                    false, parOn && (parRoute == 2), parAmt);
 }

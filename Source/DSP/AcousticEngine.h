@@ -116,7 +116,7 @@ struct MultiMicRoomConfig
 {
     int modeIdx = 1;       // 0: Reverb, 1: Re-Mic
     int sourceIdx = 0;     // 0: Vocals, 1: Drums, 2: Ensemble, 3: Monitors, 4: Guitar Mono, 5: Guitar Stereo, 6: Bass Amp
-    int roomIdx = 0;       // 0: Studio A (Shangri-La), 1: Studio B (Canyon), 2: Volcano (~16m)
+    int roomIdx = 0;       // 0: Studio A (Shangri-La), 1: Studio B (Canyon), 2: Volcano (~20m)
     int wallsLive = 1;     // 0: Tight / Closed, 1: Live / Open
     bool phaseSafe = true;
     bool phaseInvert = false;
@@ -129,9 +129,9 @@ struct MultiMicRoomConfig
     bool roomParallelCrush = false;
     float roomParallelAmt  = 0.45f;
 
-    std::array<float, 4> micX    { 0.0f, -0.42f, 0.42f, 0.05f };
-    std::array<float, 4> micY    { 0.18f, 0.54f, 0.76f, 0.86f };
-    std::array<float, 4> micGain { 1.0f,  0.25f, 0.0f,  0.0f };
+    std::array<float, 4> micX    { 0.0f, -0.42f, -0.52f, 0.52f };
+    std::array<float, 4> micY    { 0.18f, 0.54f,  0.78f, 0.78f };
+    std::array<float, 4> micGain { 1.0f,  0.25f,  0.0f,  0.0f };
 };
 
 class AcousticEngine
@@ -140,8 +140,6 @@ public:
     void prepare (double sampleRate, int maxBlockSize)
     {
         sr = sampleRate > 0.0 ? sampleRate : 44100.0;
-
-        // Suavizado exponencial (~30 ms) para evitar clicks al mover atriles o cambiar de sala
         smoothCoeff = 1.0f - std::exp (-1.0f / (0.030f * static_cast<float> (sr)));
         smoothInitialized = false;
 
@@ -161,9 +159,8 @@ public:
 
         midPhaseHpf.prepare (sr);   midPhaseHpf.setHighPass (115.0f, 0.7071f);
         airPhaseHpf.prepare (sr);   airPhaseHpf.setHighPass (155.0f, 0.7071f);
-        deccaPhaseHpf.prepare (sr); deccaPhaseHpf.setHighPass (95.0f, 0.7071f);
+        deccaPhaseHpf.prepare (sr); deccaPhaseHpf.setHighPass (155.0f, 0.7071f);
 
-        // Filtros dedicados para la Sala (interpolados suavemente para evitar zipper)
         roomLowShelf.prepare (sr);
         roomMidPeak.prepare (sr);
         roomHighShelf.prepare (sr);
@@ -172,7 +169,6 @@ public:
         deMudHpf.prepare (sr);      deMudHpf.setHighPass (165.0f, 0.7071f);
         deMudDip.prepare (sr);      deMudDip.setPeak (275.0f, -4.5f, 1.1f);
 
-        // Filtros dedicados para la Cámara (sin compartir estado con la Sala)
         chamberBoomDip.prepare (sr);  chamberBoomDip.setPeak (240.0f, -2.4f, 1.05f);
         chamberSubHpf.prepare (sr);   chamberSubHpf.setHighPass (48.0f, 0.7071f);
         chamberDeMudHpf.prepare (sr); chamberDeMudHpf.setHighPass (165.0f, 0.7071f);
@@ -187,9 +183,7 @@ public:
         customConvolver.prepare (spec);
         mainAirLpL = mainAirLpR = 0.0f;
         airLpL = airLpR = 0.0f;
-        smLowDb = 0.0f;
-        smMidDb = 0.0f;
-        smHighDb = 0.0f;
+        smLowDb = smMidDb = smHighDb = 0.0f;
     }
 
     void reset()
@@ -228,13 +222,12 @@ public:
     {
         if (buffer.getNumChannels() < 2) return;
 
-        // Perfiles acústicos diferenciados:
-        // 0: Studio A (Shangri-La) — sala amplia y musical (~12.5m largo x 15.0m ancho)
-        // 1: Studio B (Canyon)     — sala más compacta y directa (~8.5m largo x 10.5m ancho)
-        // 2: Volcano               — salón de madera más largo (~16.0m largo x 12.0m ancho), gran profundidad
+        // 0: Studio A (Shangri-La) — ~12.5m
+        // 1: Studio B (Canyon)     — ~8.5m (compacta y con pegada)
+        // 2: Volcano               — ~20.0m (salón masivo y expansivo)
         static constexpr std::array<float, 8> studioADelays { 29.3f, 37.1f, 43.7f, 53.3f, 61.9f, 71.1f, 83.3f, 97.7f };
         static constexpr std::array<float, 8> studioBDelays { 17.3f, 21.1f, 26.9f, 31.7f, 37.9f, 43.1f, 51.3f, 59.7f };
-        static constexpr std::array<float, 8> volcanoDelays { 33.7f, 41.9f, 50.3f, 59.9f, 70.1f, 81.1f, 93.7f, 108.7f };
+        static constexpr std::array<float, 8> volcanoDelays { 38.3f, 47.9f, 58.7f, 70.1f, 82.9f, 96.7f, 111.7f, 128.3f };
 
         const int rIdx = std::clamp (cfg.roomIdx, 0, 2);
         const int wLive = (cfg.wallsLive != 0) ? 1 : 0;
@@ -260,21 +253,21 @@ public:
             roomSubHpf.setHighPass (wLive ? 54.0f : 65.0f, 0.72f);
             roomBoomDip.setPeak (260.0f, wLive ? -2.2f : -3.4f, 1.15f);
         }
-        else // Volcano (~16m largo): madera, vigas, alfombras y apertura Open/Closed
+        else // Volcano (~20.0m expansivo)
         {
-            if (wLive) // Volcano Open: más apertura, aire y profundidad de sala larga
+            if (wLive)
             {
-                lowFreq = 115.0f;  midFreq = 920.0f;  midQ = 0.88f; highFreq = 9200.0f;
-                targetLowDb  =  2.2f;
-                targetMidDb  =  1.2f;
-                targetHighDb =  1.6f;
-                roomSubHpf.setHighPass (42.0f, 0.7071f);
-                roomBoomDip.setPeak (225.0f, -2.0f, 1.0f);
+                lowFreq = 110.0f;  midFreq = 880.0f;  midQ = 0.85f; highFreq = 9500.0f;
+                targetLowDb  =  2.5f;
+                targetMidDb  =  1.3f;
+                targetHighDb =  1.8f;
+                roomSubHpf.setHighPass (40.0f, 0.7071f);
+                roomBoomDip.setPeak (220.0f, -2.0f, 1.0f);
             }
-            else // Volcano Closed: más contenido, enfocado y con graves controlados
+            else
             {
                 lowFreq = 130.0f;  midFreq = 1650.0f; midQ = 1.00f; highFreq = 7500.0f;
-                targetLowDb  =  0.6f;
+                targetLowDb  =  0.7f;
                 targetMidDb  =  0.5f;
                 targetHighDb = -2.0f;
                 roomSubHpf.setHighPass (58.0f, 0.75f);
@@ -294,24 +287,26 @@ public:
             baseRt60 = wLive ? 1.05f : 0.62f;
             damp     = wLive ? 0.34f : 0.64f;
         }
-        else // Volcano: más cola y aire al abrir, más seco y enfocado al cerrar
+        else // Volcano 20m: gran profundidad en Live Wood, controlado en Tight
         {
-            baseRt60 = wLive ? 2.15f : 0.92f;
-            damp     = wLive ? 0.22f : 0.60f;
+            baseRt60 = wLive ? 2.65f : 1.05f;
+            damp     = wLive ? 0.20f : 0.58f;
         }
 
         const auto& activeDelays = (rIdx == 0) ? studioADelays : ((rIdx == 1) ? studioBDelays : volcanoDelays);
-        roomFdn.setProfile (activeDelays, baseRt60, damp, wLive ? 0.42f : 0.24f);
+        roomFdn.setProfile (activeDelays, baseRt60, damp, wLive ? 0.48f : 0.24f);
 
+        // Sin grit agresivo a 1x en sala para mantener agudos limpios sin aliasing
         if (cfg.roomParallelCrush)
-            roomAmbComp.configure (3, -24.0f, true, true);
+            roomAmbComp.configure (3, -24.0f, true, true, false);
 
-        // Dimensiones físicas coherentes (Volcano es la más larga: ~16.0m)
-        const float roomW = (rIdx == 0) ? 15.0f : ((rIdx == 1) ? 10.5f : 12.0f);
-        const float roomD = (rIdx == 0) ? 12.5f : ((rIdx == 1) ? 8.5f  : 16.0f);
+        const float roomW = (rIdx == 0) ? 15.0f : ((rIdx == 1) ? 10.5f : 14.0f);
+        const float roomD = (rIdx == 0) ? 12.5f : ((rIdx == 1) ? 8.5f  : 20.0f);
         const float speed = 343.0f;
-        const float wallRef = (rIdx == 2) ? (wLive ? 0.76f : 0.40f)
+        const float wallRef = (rIdx == 2) ? (wLive ? 0.80f : 0.42f)
                                           : (wLive ? 0.72f : 0.44f);
+
+        const float farW = std::clamp (cfg.deccaWidth, 0.2f, 1.5f);
 
         std::array<float, 4> distMeters {};
         std::array<float, 4> targetPanL {}, targetPanR {};
@@ -332,17 +327,18 @@ public:
             const float my = juce::jmap (cfg.micY[s], 0.0f, 1.0f, 0.35f, roomD - 1.5f);
             distMeters[s] = std::hypot (mx, my);
 
-            const float atten = 1.0f / (1.0f + 0.14f * std::max (0.0f, distMeters[s] - 0.5f));
+            const float atten = 1.0f / (1.0f + 0.12f * std::max (0.0f, distMeters[s] - 0.5f));
             targetDirWeight[s] = atten;
-            targetAmbWeight[s] = std::clamp (0.18f + (distMeters[s] / std::max (1.0f, roomD)) * 0.85f, 0.15f, 1.25f);
+            targetAmbWeight[s] = std::clamp (0.18f + (distMeters[s] / std::max (1.0f, roomD)) * 0.92f, 0.15f, 1.35f);
 
-            const float pan = std::clamp (cfg.micX[s] * 0.72f, -0.88f, 0.88f);
+            // Para FAR L (2) y FAR R (3), FAR WIDE escala la apertura del paneo estéreo real
+            const float panScale = (s >= 2) ? (0.78f * farW) : 0.72f;
+            const float pan = std::clamp (cfg.micX[s] * panScale, -0.96f, 0.96f);
             const float ang = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
             targetPanL[s] = std::cos (ang) * 1.414f;
             targetPanR[s] = std::sin (ang) * 1.414f;
         }
 
-        // Retardo base de 1:MAIN y retardos físicos coherentes para 2:ROOM PAIR, 3:FAR L y 4:FAR R
         const float mainDelaySamples = (distMeters[0] / speed) * static_cast<float> (sr);
         targetDelay[0] = mainDelaySamples;
 
@@ -354,7 +350,7 @@ public:
             targetDelay[s] = mainDelaySamples + relSec * static_cast<float> (sr);
         }
 
-        const float targetFarOffset = juce::jmap (cfg.deccaWidth, 0.2f, 1.5f, 0.0008f, 0.0085f) * static_cast<float> (sr);
+        const float targetFarOffset = juce::jmap (farW, 0.2f, 1.5f, 0.0005f, 0.0065f) * static_cast<float> (sr);
 
         if (! smoothInitialized)
         {
@@ -375,8 +371,8 @@ public:
             smoothInitialized = true;
         }
 
-        const float roomScaleEr = (rIdx == 0) ? 1.12f : ((rIdx == 1) ? 0.82f : 1.32f);
-        const float openErScale = (rIdx == 2 && ! wLive) ? 0.84f : 1.0f;
+        const float roomScaleEr = (rIdx == 0) ? 1.12f : ((rIdx == 1) ? 0.82f : 1.55f);
+        const float openErScale = (rIdx == 2 && ! wLive) ? 0.80f : 1.0f;
         const size_t erSideL = static_cast<size_t> (0.0112f * roomScaleEr * openErScale * sr);
         const size_t erSideR = static_cast<size_t> (0.0158f * roomScaleEr * openErScale * sr);
         const size_t erFloor = static_cast<size_t> (0.0194f * roomScaleEr * openErScale * sr);
@@ -385,10 +381,9 @@ public:
         const size_t erBackR = static_cast<size_t> (0.0368f * roomScaleEr * openErScale * sr);
 
         const float pairW = std::clamp (cfg.pairSpread, 0.0f, 1.5f);
-        const float farW  = std::clamp (cfg.deccaWidth, 0.2f, 1.5f);
         const float polaritySign = cfg.phaseInvert ? -1.0f : 1.0f;
 
-        const float airMaxCoeff = (rIdx == 2) ? (wLive ? 0.44f : 0.62f)
+        const float airMaxCoeff = (rIdx == 2) ? (wLive ? 0.42f : 0.62f)
                                               : ((rIdx == 1) ? 0.56f : 0.52f);
         const float airMinCoeff = (rIdx == 2) ? (wLive ? 0.12f : 0.24f) : 0.16f;
 
@@ -461,13 +456,13 @@ public:
             float mainL = 0.0f, mainR = 0.0f;
             float ambL  = 0.0f, ambR  = 0.0f;
 
-            // ATRIL 1: MAIN (retardo físico suavizado + atenuación por distancia + absorción de aire)
+            // ATRIL 1: MAIN
             if (smGain[0] > 0.0005f)
             {
                 const float g = smGain[0] * smDirWeight[0];
                 const float yDist = smMicY[0];
-                const float dirW = juce::jmap (yDist, 0.0f, 1.0f, 0.98f, 0.32f);
-                const float ambW = juce::jmap (yDist, 0.0f, 1.0f, 0.06f, 0.68f) * smAmbWeight[0];
+                const float dirW = juce::jmap (yDist, 0.0f, 1.0f, 0.98f, 0.30f);
+                const float ambW = juce::jmap (yDist, 0.0f, 1.0f, 0.06f, 0.72f) * smAmbWeight[0];
 
                 float dirL = readFrac (erBufL, smDelay[0]);
                 float dirR = readFrac (erBufR, smDelay[0]);
@@ -488,7 +483,7 @@ public:
                 mainR += sR * smPanR[0] * g;
             }
 
-            // ATRIL 2: ROOM PAIR (combina par de sala medio + aire con apertura PAIR WIDE)
+            // ATRIL 2: ROOM PAIR (par estéreo de sala con PAIR WIDE)
             if (smGain[1] > 0.0005f)
             {
                 const float g = smGain[1] * 0.80f * smDirWeight[1];
@@ -515,51 +510,39 @@ public:
                 ambR += (mid - side) * smPanR[1] * g;
             }
 
-            // ATRIL 3: FAR L (micrófono lejano izquierdo con apertura FAR WIDE)
+            // ATRIL 3: FAR L — Cápsula MONO real ubicada en el costado izquierdo
             if (smGain[2] > 0.0005f)
             {
-                const float g = smGain[2] * 0.76f * smDirWeight[2];
+                const float g = smGain[2] * 0.78f * smDirWeight[2];
                 const float ambW = smAmbWeight[2];
-                const float dFarL = smDelay[2] + smDeccaOffset * 0.5f;
-                float fL = readFrac (erBufL, dFarL) * 0.22f + (erL * 0.78f + fdnL * 0.95f) * ambW;
-                float fR = readFrac (erBufR, dFarL) * 0.22f + (erR * 0.42f + fdnR * 0.55f) * ambW;
+                const float dFarL = smDelay[2] + smDeccaOffset * 0.35f;
+                const float dirMonoL = 0.65f * readFrac (erBufL, dFarL) + 0.35f * readFrac (erBufR, dFarL);
+                float capsuleL = dirMonoL * 0.22f + (erL * 0.76f + fdnL * 0.96f) * ambW;
 
                 if (cfg.phaseSafe)
-                {
-                    fL = airPhaseHpf.processSample (0, fL);
-                    fR = airPhaseHpf.processSample (1, fR);
-                }
+                    capsuleL = airPhaseHpf.processSample (0, capsuleL);
 
-                const float mid  = 0.5f * (fL + fR);
-                const float side = 0.5f * (fL - fR) * farW;
-                const float panScaleL = juce::jmap (farW, 0.2f, 1.5f, 0.55f, 1.15f);
-                ambL += (mid + side) * smPanL[2] * panScaleL * g;
-                ambR += (mid - side) * smPanR[2] * 0.55f * g;
+                // Señal mono real paneada en el campo estéreo según posición X + FAR WIDE
+                ambL += capsuleL * smPanL[2] * g;
+                ambR += capsuleL * smPanR[2] * g;
             }
 
-            // ATRIL 4: FAR R (micrófono lejano derecho con apertura FAR WIDE)
+            // ATRIL 4: FAR R — Cápsula MONO real ubicada en el costado derecho
             if (smGain[3] > 0.0005f)
             {
-                const float g = smGain[3] * 0.76f * smDirWeight[3];
+                const float g = smGain[3] * 0.78f * smDirWeight[3];
                 const float ambW = smAmbWeight[3];
-                const float dFarR = smDelay[3] + smDeccaOffset * 0.5f;
-                float rL = readFrac (erBufL, dFarR) * 0.22f + (erL * 0.42f + fdnL * 0.55f) * ambW;
-                float rR = readFrac (erBufR, dFarR) * 0.22f + (erR * 0.78f + fdnR * 0.95f) * ambW;
+                const float dFarR = smDelay[3] + smDeccaOffset * 0.65f;
+                const float dirMonoR = 0.35f * readFrac (erBufL, dFarR) + 0.65f * readFrac (erBufR, dFarR);
+                float capsuleR = dirMonoR * 0.22f + (erR * 0.76f + fdnR * 0.96f) * ambW;
 
                 if (cfg.phaseSafe)
-                {
-                    rL = deccaPhaseHpf.processSample (0, rL);
-                    rR = deccaPhaseHpf.processSample (1, rR);
-                }
+                    capsuleR = deccaPhaseHpf.processSample (1, capsuleR);
 
-                const float mid  = 0.5f * (rL + rR);
-                const float side = 0.5f * (rL - rR) * farW;
-                const float panScaleR = juce::jmap (farW, 0.2f, 1.5f, 0.55f, 1.15f);
-                ambL += (mid + side) * smPanL[3] * 0.55f * g;
-                ambR += (mid - side) * smPanR[3] * panScaleR * g;
+                ambL += capsuleR * smPanL[3] * g;
+                ambR += capsuleR * smPanR[3] * g;
             }
 
-            // Modelado tonal por sala (bajos, medios y agudos) sobre el ambiente
             ambL = roomHighShelf.processSample (0, roomMidPeak.processSample (0, roomLowShelf.processSample (0,
                    roomBoomDip.processSample (0, roomSubHpf.processSample (0, ambL)))));
             ambR = roomHighShelf.processSample (1, roomMidPeak.processSample (1, roomLowShelf.processSample (1,
@@ -652,7 +635,7 @@ public:
         }
 
         if (chamberParallelCrush && parallelAmt > 0.001f)
-            chamberAmbComp.configure (3, -24.0f, true, true);
+            chamberAmbComp.configure (3, -24.0f, true, true, false);
 
         auto* sL = scratchBuffer.getWritePointer (0);
         auto* sR = scratchBuffer.getWritePointer (1);

@@ -51,7 +51,6 @@ public:
         currentDrive = enabled ? std::clamp((inGainDb + 6.0f) / 18.0f, 0.05f, 0.85f) : 0.0f;
     }
 
-    // Procesa la curva tonal de microfono con crossfade suave anti-clics
     void processEQ(juce::AudioBuffer<float>& buffer)
     {
         if (buffer.getNumSamples() == 0)
@@ -91,11 +90,10 @@ public:
 private:
     void updateMicCurves()
     {
-        // Compensacion aproximada segun microfono de entrada -> destino
         float loDb = 0.0f, midDb = 0.0f, airDb = 0.0f;
         float midHz = 3200.0f, airHz = 10000.0f;
 
-        // Entrada: 0=SM7B, 1=U87, 2=NT1/Condenser, 3=SM58
+        // Entrada: 0=SM7B, 1=U87, 2=Condenser, 3=SM58
         if (inMic == 0)      { loDb -= 1.2f; midDb += 1.5f; airDb += 2.5f; }
         else if (inMic == 3) { loDb -= 2.0f; midDb -= 1.0f; airDb += 3.2f; }
 

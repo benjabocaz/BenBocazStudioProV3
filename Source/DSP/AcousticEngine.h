@@ -42,6 +42,13 @@ public:
             panSmooth[m].reset(fs, 0.025);
         }
 
+        // Lineas de retardo para Early Reflections (hasta 65 ms)
+        const int maxErSamples = static_cast<int>(fs * 0.065) + 16;
+        erDelayL.prepare({ fs, static_cast<juce::uint32>(maxBlock), 1 });
+        erDelayR.prepare({ fs, static_cast<juce::uint32>(maxBlock), 1 });
+        erDelayL.setMaximumDelayInSamples(maxErSamples);
+        erDelayR.setMaximumDelayInSamples(maxErSamples);
+
         roomRevL.setSampleRate(fs);
         roomRevR.setSampleRate(fs);
         coupledStoneRev.setSampleRate(fs);
@@ -58,6 +65,7 @@ public:
         chamberPreDelayR.setMaximumDelayInSamples(static_cast<int>(fs * 0.150) + 16);
 
         roomBusBuffer.setSize(2, maxBlock);
+        erBuffer.setSize(2, maxBlock);
         tailBufferL.setSize(2, maxBlock);
         tailBufferR.setSize(2, maxBlock);
         coupledBuffer.setSize(2, maxBlock);
@@ -74,8 +82,11 @@ public:
             delayL[m].reset(); delayR[m].reset();
             airLpfL[m].reset(); airLpfR[m].reset();
         }
+        erDelayL.reset();
+        erDelayR.reset();
         for (int c = 0; c < 2; ++c)
         {
+            erFilter[c].reset();
             tailLowFilter[c].reset();
             tailHighFilter[c].reset();
         }
@@ -145,6 +156,35 @@ public:
         const bool anySolo = mics[0].solo || mics[1].solo || mics[2].solo || mics[3].solo;
         const bool volcanoGatesOpen = (roomIndex == VOLCANO && wallsIndex == 0);
 
+        const float* inL = ioBuffer.getReadPointer(0);
+        const float* inR = ioBuffer.getNumChannels() > 1 ? ioBuffer.getReadPointer(1) : inL;
+
+        // 1. Early Reflections (6 taps fisicos por sala + balance L/R compensado)
+        erBuffer.setSize(2, numSamples, false, false, true);
+        auto* erOutL = erBuffer.getWritePointer(0);
+        auto* erOutR = erBuffer.getWritePointer(1);
+        const float msToSmp = static_cast<float>(fs) * 0.001f;
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            erDelayL.pushSample(0, inL[i]);
+            erDelayR.pushSample(0, inR[i]);
+
+            float sumErL = 0.0f;
+            float sumErR = 0.0f;
+            for (const auto& t : currentErTaps)
+            {
+                sumErL += erDelayL.popSample(0, t.msL * msToSmp, false) * t.gainL;
+                sumErR += erDelayR.popSample(0, t.msR * msToSmp, false) * t.gainR;
+            }
+            erDelayL.popSample(0, 1.0f, true);
+            erDelayR.popSample(0, 1.0f, true);
+
+            erOutL[i] = erFilter[0].processSample(sumErL * erMasterGain * erTrimL);
+            erOutR[i] = erFilter[1].processSample(sumErR * erMasterGain * erTrimR);
+        }
+
+        // 2. Colas difusas descorrelacionadas
         tailBufferL.setSize(2, numSamples, false, false, true);
         tailBufferR.setSize(2, numSamples, false, false, true);
         tailBufferL.copyFrom(0, 0, ioBuffer, 0, 0, numSamples);
@@ -155,7 +195,6 @@ public:
         roomRevL.processStereo(tailBufferL.getWritePointer(0), tailBufferL.getWritePointer(1), numSamples);
         roomRevR.processStereo(tailBufferR.getWritePointer(0), tailBufferR.getWritePointer(1), numSamples);
 
-        // Perfil de materiales por bandas (Canyon seco, Shangri-La asimetrico vidrio L / madera R, Volcano piedra)
         auto* tLL = tailBufferL.getWritePointer(0);
         auto* tLR = tailBufferL.getWritePointer(1);
         auto* tRL = tailBufferR.getWritePointer(0);
@@ -168,22 +207,20 @@ public:
             tRR[i] = tailHighFilter[1].processSample(tailLowFilter[1].processSample(tRR[i]));
         }
 
-        // Camara trasera de piedra volcanica acoplada (solo Volcano Gates Open)
+        // 3. Camara trasera de piedra volcanica acoplada (solo Volcano Gates Open)
         const float* cL = nullptr;
         const float* cR = nullptr;
         if (volcanoGatesOpen)
         {
             coupledBuffer.setSize(2, numSamples, false, false, true);
-            const float preSmp = static_cast<float>(fs) * 0.028f; // ~28ms de distancia a la camara trasera
-            const float* srcL = ioBuffer.getReadPointer(0);
-            const float* srcR = ioBuffer.getNumChannels() > 1 ? ioBuffer.getReadPointer(1) : srcL;
+            const float preSmp = static_cast<float>(fs) * 0.028f;
             auto* dstL = coupledBuffer.getWritePointer(0);
             auto* dstR = coupledBuffer.getWritePointer(1);
 
             for (int i = 0; i < numSamples; ++i)
             {
-                coupledPreDelayL.pushSample(0, srcL[i]);
-                coupledPreDelayR.pushSample(0, srcR[i]);
+                coupledPreDelayL.pushSample(0, inL[i] * 0.72f + erOutL[i] * 0.45f);
+                coupledPreDelayR.pushSample(0, inR[i] * 0.72f + erOutR[i] * 0.45f);
                 dstL[i] = coupledPreDelayL.popSample(0, preSmp);
                 dstR[i] = coupledPreDelayR.popSample(0, preSmp);
             }
@@ -192,6 +229,7 @@ public:
             cR = dstR;
         }
 
+        // 4. Actualiza targets de los 4 atriles
         const float maxRoomM = (roomIndex == VOLCANO) ? 21.5f : (roomIndex == SHANGRILA ? 11.5f : 8.5f);
         for (int m = 0; m < 4; ++m)
         {
@@ -222,8 +260,6 @@ public:
         outRoomOnlyBuffer.setSize(2, numSamples, false, false, true);
         outRoomOnlyBuffer.clear();
 
-        const float* inL = ioBuffer.getReadPointer(0);
-        const float* inR = ioBuffer.getNumChannels() > 1 ? ioBuffer.getReadPointer(1) : inL;
         auto* outL = roomBusBuffer.getWritePointer(0);
         auto* outR = roomBusBuffer.getWritePointer(1);
         auto* roomOnlyL = outRoomOnlyBuffer.getWritePointer(0);
@@ -267,24 +303,28 @@ public:
                 const float stoneR = volcanoGatesOpen ? (cR[i] * (m >= 2 ? 0.42f : 0.16f)) : 0.0f;
 
                 float sigL = 0.0f, sigR = 0.0f;
-                if (m == 0)
+                if (m == 0) // 1: MAIN
                 {
-                    sigL = dL * directRatio + tLL[i] * (wetRatio * 0.30f) + stoneL * 0.35f;
-                    sigR = dR * directRatio + tLR[i] * (wetRatio * 0.30f) + stoneR * 0.35f;
+                    sigL = dL * directRatio + erOutL[i] * (0.16f + normD * 0.22f) + tLL[i] * (wetRatio * 0.26f) + stoneL * 0.30f;
+                    sigR = dR * directRatio + erOutR[i] * (0.16f + normD * 0.22f) + tLR[i] * (wetRatio * 0.26f) + stoneR * 0.30f;
                 }
-                else if (m == 1)
+                else if (m == 1) // 2: ROOM / AIR
                 {
-                    sigL = dL * (directRatio * 0.65f) + tLL[i] * (wetRatio * 0.70f) + stoneL * 0.75f;
-                    sigR = dR * (directRatio * 0.65f) + tLR[i] * (wetRatio * 0.70f) + stoneR * 0.75f;
+                    sigL = dL * (directRatio * 0.60f) + erOutL[i] * 0.48f + tLL[i] * (wetRatio * 0.64f) + stoneL * 0.70f;
+                    sigR = dR * (directRatio * 0.60f) + erOutR[i] * 0.48f + tLR[i] * (wetRatio * 0.64f) + stoneR * 0.70f;
                 }
-                else if (m == 2)
+                else if (m == 2) // 3: FAR L
                 {
-                    const float monoFarL = 0.5f * (dL + dR) * (directRatio * 0.45f) + (0.65f * tLL[i] + 0.35f * tLR[i]) * wetRatio + stoneL;
+                    const float monoFarL = 0.5f * (dL + dR) * (directRatio * 0.40f)
+                                         + (0.75f * erOutL[i] + 0.25f * erOutR[i]) * 0.34f
+                                         + (0.65f * tLL[i] + 0.35f * tLR[i]) * wetRatio + stoneL;
                     sigL = sigR = monoFarL;
                 }
-                else
+                else // 4: FAR R
                 {
-                    const float monoFarR = 0.5f * (dL + dR) * (directRatio * 0.45f) + (0.65f * tRR[i] + 0.35f * tRL[i]) * wetRatio + stoneR;
+                    const float monoFarR = 0.5f * (dL + dR) * (directRatio * 0.40f)
+                                         + (0.75f * erOutR[i] + 0.25f * erOutL[i]) * 0.34f
+                                         + (0.65f * tRR[i] + 0.35f * tRL[i]) * wetRatio + stoneR;
                     sigL = sigR = monoFarR;
                 }
 
@@ -352,14 +392,30 @@ public:
     }
 
 private:
+    struct ErTap { float msL, msR, gainL, gainR; };
+
     void updateRoomProfile()
     {
         juce::Reverb::Parameters pL, pR;
         const bool isOpen = (lastWalls == 0);
+        erTrimL = 1.0f;
+        erTrimR = 1.0f;
 
         if (lastRoom == VOLCANO)
         {
-            // Piedra volcanica + madera ranurada: sosten profundo en graves y difusion alta
+            currentErTaps = {{
+                { 18.2f, 19.5f, 0.34f, 0.34f },
+                { 23.4f, 25.1f, 0.28f, 0.28f },
+                { 29.8f, 31.2f, 0.23f, 0.23f },
+                { 36.5f, 38.0f, 0.18f, 0.18f },
+                { 42.1f, 44.6f, 0.14f, 0.14f },
+                { 48.5f, 51.0f, 0.11f, 0.11f }
+            }};
+            erMasterGain = isOpen ? 0.62f : 0.52f;
+
+            auto erC = juce::dsp::IIR::Coefficients<float>::makePeakFilter(fs, 280.0f, 0.9f, juce::Decibels::decibelsToGain(-1.5f));
+            erFilter[0].coefficients = erFilter[1].coefficients = erC;
+
             pL.roomSize = isOpen ? 0.88f : 0.68f;
             pL.damping  = isOpen ? 0.26f : 0.50f;
             pL.width    = 1.0f;
@@ -380,21 +436,48 @@ private:
         }
         else if (lastRoom == SHANGRILA)
         {
-            // Asimetria fisica: Ventanal vidrio a la izquierda (+brillo) vs Estanterias/madera a la derecha (+calidez)
+            // Volumen L/R simetrico con timbre asimetrico (L = vidrio, R = madera/libros)
+            currentErTaps = {{
+                {  6.2f,  8.1f, 0.34f, 0.34f },
+                {  9.4f, 12.6f, 0.28f, 0.28f },
+                { 13.1f, 16.8f, 0.22f, 0.22f },
+                { 17.5f, 22.3f, 0.18f, 0.18f },
+                { 21.0f, 27.1f, 0.14f, 0.14f },
+                { 25.4f, 31.8f, 0.10f, 0.10f }
+            }};
+            erMasterGain = isOpen ? 0.58f : 0.46f;
+            erTrimL = 0.96f;
+            erTrimR = 1.04f;
+
+            erFilter[0].coefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf(fs, 3800.0f, 0.707f, juce::Decibels::decibelsToGain(isOpen ? 1.3f : 0.7f));
+            erFilter[1].coefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf(fs, 3800.0f, 0.707f, juce::Decibels::decibelsToGain(isOpen ? -1.3f : -0.9f));
+
             pL.roomSize = isOpen ? 0.66f : 0.48f;
             pL.damping  = isOpen ? 0.38f : 0.58f;
             pL.width    = 0.94f;
 
-            auto lo = juce::dsp::IIR::Coefficients<float>::makeLowShelf(fs, 180.0f, 0.707f, juce::Decibels::decibelsToGain(-0.8f));
-            tailLowFilter[0].coefficients = tailLowFilter[1].coefficients = lo;
+            // Tilt compensado: L (+brillo / -graves) vs R (+calidez / -brillo) para mantener volumen L/R identico
+            tailLowFilter[0].coefficients  = juce::dsp::IIR::Coefficients<float>::makeLowShelf(fs, 200.0f, 0.707f, juce::Decibels::decibelsToGain(-1.2f));
+            tailHighFilter[0].coefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf(fs, 4200.0f, 0.707f, juce::Decibels::decibelsToGain(isOpen ? 1.4f : 0.8f));
 
-            // Canal 0 (Izquierda - Vidrio vivo) vs Canal 1 (Derecha - Estanterias/difusion suave)
-            tailHighFilter[0].coefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf(fs, 4500.0f, 0.707f, juce::Decibels::decibelsToGain(isOpen ? 2.6f : 1.2f));
-            tailHighFilter[1].coefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf(fs, 4200.0f, 0.707f, juce::Decibels::decibelsToGain(isOpen ? -1.4f : -2.4f));
+            tailLowFilter[1].coefficients  = juce::dsp::IIR::Coefficients<float>::makeLowShelf(fs, 200.0f, 0.707f, juce::Decibels::decibelsToGain(1.0f));
+            tailHighFilter[1].coefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf(fs, 4200.0f, 0.707f, juce::Decibels::decibelsToGain(isOpen ? -1.2f : -0.8f));
         }
         else // CANYON
         {
-            // Techo artesonado + trampas de graves de esquina: graves secos/amarrados y agudos sedosos
+            currentErTaps = {{
+                {  4.2f,  4.8f, 0.35f, 0.35f },
+                {  6.5f,  7.1f, 0.28f, 0.28f },
+                {  8.9f,  9.4f, 0.22f, 0.22f },
+                { 11.2f, 11.8f, 0.16f, 0.16f },
+                { 13.5f, 14.1f, 0.12f, 0.12f },
+                { 15.8f, 16.2f, 0.08f, 0.08f }
+            }};
+            erMasterGain = isOpen ? 0.52f : 0.40f;
+
+            auto erC = juce::dsp::IIR::Coefficients<float>::makeLowPass(fs, isOpen ? 6800.0f : 5500.0f, 0.707f);
+            erFilter[0].coefficients = erFilter[1].coefficients = erC;
+
             pL.roomSize = isOpen ? 0.42f : 0.26f;
             pL.damping  = isOpen ? 0.58f : 0.76f;
             pL.width    = 0.84f;
@@ -410,8 +493,8 @@ private:
         pL.freezeMode = 0.0f;
 
         pR = pL;
-        pR.roomSize = std::clamp(pL.roomSize * 0.97f, 0.20f, 0.96f);
-        pR.damping  = std::clamp(pL.damping + 0.04f, 0.10f, 0.90f);
+        pR.roomSize = std::clamp(pL.roomSize * 0.985f, 0.20f, 0.96f);
+        pR.damping  = std::clamp(pL.damping + 0.02f, 0.10f, 0.90f);
 
         roomRevL.setParameters(pL);
         roomRevR.setParameters(pR);
@@ -424,6 +507,13 @@ private:
     int lastWalls = -1;
     bool dirtyRoom = true;
 
+    std::array<ErTap, 6> currentErTaps {{}};
+    float erMasterGain = 0.5f;
+    float erTrimL = 1.0f;
+    float erTrimR = 1.0f;
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> erDelayL, erDelayR;
+    juce::dsp::IIR::Filter<float> erFilter[2];
+
     std::array<juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear>, 4> delayL, delayR;
     std::array<juce::dsp::IIR::Filter<float>, 4> airLpfL, airLpfR;
     std::array<float, 4> lastMicDistM { -1.0f, -1.0f, -1.0f, -1.0f };
@@ -435,7 +525,7 @@ private:
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> coupledPreDelayL, coupledPreDelayR;
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> chamberPreDelayL, chamberPreDelayR;
 
-    juce::AudioBuffer<float> roomBusBuffer, tailBufferL, tailBufferR, coupledBuffer, chamberBuffer;
+    juce::AudioBuffer<float> roomBusBuffer, erBuffer, tailBufferL, tailBufferR, coupledBuffer, chamberBuffer;
 };
 
 } // namespace BenBocazDSP

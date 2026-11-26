@@ -4,58 +4,79 @@
 #endif
 
 //==============================================================================
-// Look & Feel
+// Look & Feel (Estetica de rack y perillas analogicas detalladas)
 AndesLookAndFeel::AndesLookAndFeel()
 {
-    setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff1c1612));
-    setColour(juce::ComboBox::outlineColourId, juce::Colour(0xff5a4634));
-    setColour(juce::ComboBox::textColourId, juce::Colour(0xfff0e2cc));
-    setColour(juce::PopupMenu::backgroundColourId, juce::Colour(0xff1a1410));
-    setColour(juce::PopupMenu::textColourId, juce::Colour(0xfff0e2cc));
-    setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(0xff8c5a2b));
-    setColour(juce::TextButton::buttonColourId, juce::Colour(0xff261e18));
-    setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffc98a3b));
-    setColour(juce::TextButton::textColourOffId, juce::Colour(0xffe8d9c0));
+    setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff1b1511));
+    setColour(juce::ComboBox::outlineColourId, juce::Colour(0xff6b5239));
+    setColour(juce::ComboBox::textColourId, juce::Colour(0xfff4e6cf));
+    setColour(juce::ComboBox::arrowColourId, juce::Colour(0xffe0a852));
+    setColour(juce::PopupMenu::backgroundColourId, juce::Colour(0xff19130f));
+    setColour(juce::PopupMenu::textColourId, juce::Colour(0xfff4e6cf));
+    setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(0xff996129));
+    setColour(juce::TextButton::buttonColourId, juce::Colour(0xff241c16));
+    setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffd99b43));
+    setColour(juce::TextButton::textColourOffId, juce::Colour(0xffeadbc2));
     setColour(juce::TextButton::textColourOnId, juce::Colour(0xff140f0b));
-    setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xfff0e2cc));
-    setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xfff5e4c6));
+    setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff16110d));
+    setColour(juce::Slider::textBoxOutlineColourId, juce::Colour(0xff4f3d2c));
 }
 
-void AndesLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
-                                        float sliderPos, float rotaryStartAngle, float rotaryEndAngle,
+void AndesLookAndFeel::drawRotarySlider(juce::Slider& slider, int x, int y, int width, int height,
+                                        float sliderPos, const float rotaryStartAngle, const float rotaryEndAngle,
                                         juce::Slider&)
 {
-    const float radius = static_cast<float>(juce::jmin(width, height)) * 0.42f;
+    const float size = static_cast<float>(juce::jmin(width, height));
+    const float radius = size * 0.37f;
     const float cx = static_cast<float>(x) + static_cast<float>(width) * 0.5f;
     const float cy = static_cast<float>(y) + static_cast<float>(height) * 0.5f;
     const float angle = rotaryStartAngle + sliderPos * (rotaryEndAngle - rotaryStartAngle);
 
-    // Anillo exterior
+    // Sombra suave exterior
+    g.setColour(juce::Colour(0x88090604));
+    g.fillEllipse(cx - radius - 2.0f, cy - radius + 2.0f, (radius + 2.0f) * 2.0f, (radius + 2.0f) * 2.0f);
+
+    // Pista exterior y arco activo
+    const float trackR = radius + 4.5f;
     juce::Path track;
-    track.addCentredArc(cx, cy, radius + 3.0f, radius + 3.0f, 0.0f, rotaryStartAngle, rotaryEndAngle, true);
-    g.setColour(juce::Colour(0xff3a2c20));
-    g.strokePath(track, juce::PathStrokeType(2.2f));
+    track.addCentredArc(cx, cy, trackR, trackR, 0.0f, rotaryStartAngle, rotaryEndAngle, true);
+    g.setColour(juce::Colour(0xff382a1e));
+    g.strokePath(track, juce::PathStrokeType(2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
     juce::Path active;
-    active.addCentredArc(cx, cy, radius + 3.0f, radius + 3.0f, 0.0f, rotaryStartAngle, angle, true);
-    g.setColour(juce::Colour(0xffd99b43));
-    g.strokePath(active, juce::PathStrokeType(2.6f));
+    active.addCentredArc(cx, cy, trackR, trackR, 0.0f, rotaryStartAngle, angle, true);
+    g.setColour(juce::Colour(0xffe6a84c));
+    g.strokePath(active, juce::PathStrokeType(3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
-    // Cuerpo metalico
-    juce::ColourGradient grad(juce::Colour(0xff4a3b2e), cx - radius * 0.4f, cy - radius * 0.4f,
-                              juce::Colour(0xff18120e), cx + radius * 0.6f, cy + radius * 0.6f, true);
-    g.setGradientFill(grad);
+    // Bisel metalico exterior
+    juce::ColourGradient rimGrad(juce::Colour(0xff785e43), cx - radius, cy - radius,
+                                 juce::Colour(0xff241a13), cx + radius, cy + radius, false);
+    g.setGradientFill(rimGrad);
     g.fillEllipse(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f);
 
-    g.setColour(juce::Colour(0xff6b543f));
-    g.drawEllipse(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f, 1.2f);
+    // Tapa superior de la perilla con relieve
+    const float capR = radius * 0.84f;
+    juce::ColourGradient capGrad(juce::Colour(0xff4b3b2d), cx - capR * 0.45f, cy - capR * 0.45f,
+                                 juce::Colour(0xff17110d), cx + capR * 0.55f, cy + capR * 0.55f, true);
+    g.setGradientFill(capGrad);
+    g.fillEllipse(cx - capR, cy - capR, capR * 2.0f, capR * 2.0f);
 
-    // Indicador
+    g.setColour(juce::Colour(0xff8a6d4e));
+    g.drawEllipse(cx - capR, cy - capR, capR * 2.0f, capR * 2.0f, 1.0f);
+
+    // Linea indicadora brillante
     juce::Path ptr;
-    ptr.addRoundedRectangle(-1.6f, -radius + 3.0f, 3.2f, radius * 0.55f, 1.2f);
+    ptr.addRoundedRectangle(-1.8f, -capR + 2.0f, 3.6f, capR * 0.62f, 1.4f);
     ptr.applyTransform(juce::AffineTransform::rotation(angle).translated(cx, cy));
-    g.setColour(juce::Colour(0xfff5d79b));
+    g.setColour(juce::Colour(0xffffdf9e));
     g.fillPath(ptr);
+
+    // Punto central
+    g.setColour(juce::Colour(0xffd49b46));
+    g.fillEllipse(cx - 2.2f, cy - 2.2f, 4.4f, 4.4f);
+
+    juce::ignoreUnused(slider);
 }
 
 void AndesLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
@@ -64,21 +85,33 @@ void AndesLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& b
     auto bounds = button.getLocalBounds().toFloat().reduced(1.0f);
     const bool on = button.getToggleState();
 
-    g.setColour(on ? juce::Colour(0xff3d2c1b) : juce::Colour(0xff1b1511));
+    juce::ColourGradient bg(on ? juce::Colour(0xff47321d) : juce::Colour(0xff241c16),
+                            bounds.getX(), bounds.getY(),
+                            on ? juce::Colour(0xff291c10) : juce::Colour(0xff18120e),
+                            bounds.getX(), bounds.getBottom(), false);
+    g.setGradientFill(bg);
     g.fillRoundedRectangle(bounds, 4.0f);
-    g.setColour(on ? juce::Colour(0xffd99b43) : (isHover ? juce::Colour(0xff7a6148) : juce::Colour(0xff473729)));
-    g.drawRoundedRectangle(bounds, 4.0f, 1.0f);
 
-    const float ledR = 3.6f;
-    const float ledX = bounds.getX() + 9.0f;
+    g.setColour(on ? juce::Colour(0xffe6a84c) : (isHover ? juce::Colour(0xff8c6d4e) : juce::Colour(0xff54402e)));
+    g.drawRoundedRectangle(bounds, 4.0f, 1.1f);
+
+    const float ledR = 3.8f;
+    const float ledX = bounds.getX() + 9.5f;
     const float ledY = bounds.getCentreY();
-    g.setColour(on ? juce::Colour(0xffffb84d) : juce::Colour(0xff44382d));
+
+    if (on)
+    {
+        g.setColour(juce::Colour(0x55ffbe4d));
+        g.fillEllipse(ledX - ledR - 2.2f, ledY - ledR - 2.2f, (ledR + 2.2f) * 2.0f, (ledR + 2.2f) * 2.0f);
+    }
+
+    g.setColour(on ? juce::Colour(0xffffc45e) : juce::Colour(0xff4a3b2e));
     g.fillEllipse(ledX - ledR, ledY - ledR, ledR * 2.0f, ledR * 2.0f);
 
-    g.setColour(on ? juce::Colour(0xffffecd0) : juce::Colour(0xffbba992));
+    g.setColour(on ? juce::Colour(0xfffff0d6) : juce::Colour(0xffc9b69c));
     g.setFont(juce::FontOptions(10.5f, juce::Font::bold));
     g.drawFittedText(button.getButtonText(),
-                     bounds.withTrimmedLeft(18.0f).withTrimmedRight(4.0f).toNearestInt(),
+                     bounds.withTrimmedLeft(19.0f).withTrimmedRight(4.0f).toNearestInt(),
                      juce::Justification::centredLeft, 1);
 }
 
@@ -104,8 +137,8 @@ void AnalogVUMeter::setLevelDb(float db, bool isGainReduction)
 void AnalogVUMeter::paint(juce::Graphics& g)
 {
     auto b = getLocalBounds().toFloat().reduced(1.0f);
-    juce::ColourGradient bg(juce::Colour(0xffe5b869), b.getCentreX(), b.getY(),
-                            juce::Colour(0xffb57c35), b.getCentreX(), b.getBottom(), false);
+    juce::ColourGradient bg(juce::Colour(0xffedd08c), b.getCentreX(), b.getY(),
+                            juce::Colour(0xffbd833a), b.getCentreX(), b.getBottom(), false);
     g.setGradientFill(bg);
     g.fillRoundedRectangle(b, 4.0f);
 
@@ -215,7 +248,6 @@ void Studio4MicStagePad::centerSelectedMic()
 
 juce::Point<float> Studio4MicStagePad::normToScreen(float nx, float ny, juce::Rectangle<float> area) const
 {
-    // Perspectiva levemente elevada: ny=0 cerca del fondo (fuente), ny=1 frente/extremo
     const float yTop = area.getY() + area.getHeight() * 0.56f;
     const float yBot = area.getBottom() - area.getHeight() * 0.05f;
     const float sy = yTop + ny * (yBot - yTop);
@@ -283,7 +315,7 @@ void Studio4MicStagePad::paint(juce::Graphics& g)
     static constexpr const char* xIds[4] = { "mic1X", "mic2X", "mic3X", "mic4X" };
     static constexpr const char* yIds[4] = { "mic1Y", "mic2Y", "mic3Y", "mic4Y" };
     static constexpr const char* gIds[4] = { "mic1Gain", "mic2Gain", "mic3Gain", "mic4Gain" };
-    static constexpr const char* labels[4] = { "1:MAIN", "2:ROOM", "3:FAR L", "4:FAR R" };
+    static constexpr const char* labels[4] = { "1:MAIN", "2:ROOM/AIR", "3:FAR L", "4:FAR R" };
 
     std::array<int, 4> order { 0, 1, 2, 3 };
     std::sort(order.begin(), order.end(), [&](int a, int b)
@@ -323,17 +355,15 @@ void Studio4MicStagePad::paint(juce::Graphics& g)
 
         g.setOpacity(1.0f);
 
-        // Anillo de seleccion en la base
         if (idx == selectedMic)
         {
             g.setColour(juce::Colour(0xffffb84d));
             g.drawEllipse(pos.x - 16.0f, pos.y - 6.0f, 32.0f, 11.0f, 2.0f);
         }
 
-        // Etiqueta flotante con distancia en metros
         const float distM = BenBocazDSP::AcousticEngine::computeDistanceMeters(roomIdx, nx, ny);
         const juce::String tag = juce::String(labels[idx]) + " " + juce::String(distM, 1) + "m";
-        const juce::Rectangle<float> tagRect(pos.x - 44.0f, pos.y - micH - 18.0f, 88.0f, 16.0f);
+        const juce::Rectangle<float> tagRect(pos.x - 48.0f, pos.y - micH - 18.0f, 96.0f, 16.0f);
 
         g.setColour(idx == selectedMic ? juce::Colour(0xd9261b12) : juce::Colour(0xb0140e0a));
         g.fillRoundedRectangle(tagRect, 3.0f);
@@ -347,7 +377,7 @@ void Studio4MicStagePad::paint(juce::Graphics& g)
     // 4. Barra superior de estado dentro del escenario
     const juce::String roomTitle = (roomIdx == 0) ? (wallsIdx == 0 ? "VOLCANO HALL | GATES OPEN" : "VOLCANO HALL | GATES CLOSED")
                                  : (roomIdx == 1 ? "SHANGRI-LA | LIVE WOOD" : "CANYON ROOM | STUDIO WOOD");
-    g.setColour(juce::Colour(0xb0120c08));
+    g.setColour(juce::Colour(0xb8120c08));
     g.fillRect(area.withHeight(20.0f));
     g.setColour(juce::Colour(0xffe6d2b5));
     g.setFont(juce::FontOptions(10.5f, juce::Font::bold));
@@ -357,7 +387,28 @@ void Studio4MicStagePad::paint(juce::Graphics& g)
     g.drawText(phaseOk ? "[OK] PHASE LOCKED" : "NATURAL TIME-OF-FLIGHT",
                area.withHeight(20.0f).reduced(8.0f, 0.0f), juce::Justification::centredRight);
 
-    g.setColour(juce::Colour(0xff5a4634));
+    // 5. Tarjeta inferior de microfono seleccionado y distancia
+    const float selX = apvts.getRawParameterValue(xIds[selectedMic])->load();
+    const float selY = apvts.getRawParameterValue(yIds[selectedMic])->load();
+    const float selDist = BenBocazDSP::AcousticEngine::computeDistanceMeters(roomIdx, selX, selY);
+    const int panPct = static_cast<int>(std::round((selX - 0.5f) * 200.0f));
+    const juce::String panStr = (panPct == 0) ? "CENTER" : (panPct < 0 ? juce::String(std::abs(panPct)) + "% L" : juce::String(panPct) + "% R");
+
+    const juce::Rectangle<float> infoCard(area.getRight() - 188.0f, area.getBottom() - 40.0f, 180.0f, 32.0f);
+    g.setColour(juce::Colour(0xd917110d));
+    g.fillRoundedRectangle(infoCard, 4.0f);
+    g.setColour(juce::Colour(0xff7d6245));
+    g.drawRoundedRectangle(infoCard, 4.0f, 1.0f);
+
+    g.setColour(juce::Colour(0xffffc45e));
+    g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
+    g.drawText("SELECTED: " + juce::String(labels[selectedMic]), infoCard.getX() + 7.0f, infoCard.getY() + 3.0f, 166.0f, 12.0f, juce::Justification::centredLeft);
+
+    g.setColour(juce::Colour(0xffe8d7be));
+    g.setFont(juce::FontOptions(9.0f, juce::Font::bold));
+    g.drawText("DIST: " + juce::String(selDist, 1) + "m  |  PAN: " + panStr, infoCard.getX() + 7.0f, infoCard.getY() + 16.0f, 166.0f, 12.0f, juce::Justification::centredLeft);
+
+    g.setColour(juce::Colour(0xff6b5239));
     g.drawRoundedRectangle(area, 4.0f, 1.5f);
 }
 
@@ -406,7 +457,6 @@ void Studio4MicStagePad::mouseDrag(const juce::MouseEvent& e)
 
     setMicPos(draggingMic, norm.x, norm.y);
 
-    // Movimiento en espejo para FAR L (2) y FAR R (3)
     if (link34 && (draggingMic == 2 || draggingMic == 3))
     {
         const int other = (draggingMic == 2) ? 3 : 2;
@@ -589,7 +639,6 @@ void BenBocazStudioProAudioProcessorEditor::setupKnob(juce::Slider& s, const juc
 {
     s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 64, 18);
-    // Evita el clasico "-0.00" en punto flotante
     s.textFromValueFunction = [suffix](double v)
     {
         if (std::abs(v) < 0.005) v = 0.0;
@@ -602,7 +651,7 @@ void BenBocazStudioProAudioProcessorEditor::setupLabel(juce::Label& l, const juc
 {
     l.setText(text, juce::dontSendNotification);
     l.setFont(juce::FontOptions(fontSize, juce::Font::bold));
-    l.setColour(juce::Label::textColourId, juce::Colour(0xffc9b296));
+    l.setColour(juce::Label::textColourId, juce::Colour(0xffd4bc9c));
     l.setJustificationType(just);
     addAndMakeVisible(l);
 }
@@ -618,7 +667,7 @@ void BenBocazStudioProAudioProcessorEditor::timerCallback()
                                 : processor.vuOutDb.load(std::memory_order_relaxed),
                        vuGrMode);
 
-        stagePad.repaint();
+    stagePad.repaint();
 }
 
 void BenBocazStudioProAudioProcessorEditor::paint(juce::Graphics& g)
@@ -633,9 +682,9 @@ void BenBocazStudioProAudioProcessorEditor::paint(juce::Graphics& g)
     g.fillRect(getLocalBounds());
 
     // Header
-    g.setColour(juce::Colour(0xd917110d));
+    g.setColour(juce::Colour(0xe017110d));
     g.fillRect(0, 0, getWidth(), 102);
-    g.setColour(juce::Colour(0xff5a4634));
+    g.setColour(juce::Colour(0xff6b5239));
     g.drawHorizontalLine(102, 0.0f, static_cast<float>(getWidth()));
 
     // Titulo del chasis: LOS ANDES CAPITAL
@@ -643,9 +692,37 @@ void BenBocazStudioProAudioProcessorEditor::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions(24.0f, juce::Font::bold));
     g.drawText("LOS ANDES CAPITAL", 24, 10, 320, 30, juce::Justification::centredLeft);
 
-    g.setColour(juce::Colour(0xffc99a5b));
+    g.setColour(juce::Colour(0xffd9a457));
     g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
     g.drawText("VOLCANO HALL  |  3D 4-STAND RE-MIC  |  ANALOG CONSOLE", 24, 40, 360, 16, juce::Justification::centredLeft);
+
+    // Paneles de rack en vista normal
+    if (!expandedStage)
+    {
+        auto drawRackPanel = [&](int rx, int ry, int rw, int rh, const juce::String& title)
+        {
+            juce::Rectangle<float> panel(static_cast<float>(rx), static_cast<float>(ry),
+                                         static_cast<float>(rw), static_cast<float>(rh));
+            g.setColour(juce::Colour(0xb816100c));
+            g.fillRoundedRectangle(panel, 6.0f);
+            g.setColour(juce::Colour(0xff634b34));
+            g.drawRoundedRectangle(panel, 6.0f, 1.2f);
+
+            // Cabecera del panel
+            g.setColour(juce::Colour(0xd0211812));
+            g.fillRoundedRectangle(panel.withHeight(22.0f), 6.0f);
+            g.setColour(juce::Colour(0xffe6c795));
+            g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
+            g.drawText(title, rx + 10, ry + 3, rw - 20, 16, juce::Justification::centredLeft);
+        };
+
+        drawRackPanel(24, 110, 264, 434, "VOCAL MIC MOD & ROOM SETUP");
+        drawRackPanel(300, 110, 660, 434, "LIVE ROOM 3D STAGE");
+        drawRackPanel(972, 110, 264, 434, "ECHO CHAMBERS");
+        drawRackPanel(24, 556, 572, 214, "ANALOG CONSOLE EQ");
+        drawRackPanel(608, 556, 488, 214, "OUTBOARD & PARALLEL COMP");
+        drawRackPanel(1108, 556, 128, 214, "MASTER");
+    }
 }
 
 void BenBocazStudioProAudioProcessorEditor::resized()
@@ -659,7 +736,7 @@ void BenBocazStudioProAudioProcessorEditor::resized()
     vuMeter.setBounds(930, 8, 210, 48);
     btVuMode.setBounds(1150, 14, 92, 34);
 
-    // Top Row 2 (Presets & Stage tools, sin boton i TIPS)
+    // Top Row 2
     cbPresets.setBounds(24, 68, 285, 24);
     btSnapCenter.setBounds(322, 68, 115, 24);
     btLink34.setBounds(446, 68, 98, 24);
@@ -713,70 +790,69 @@ void BenBocazStudioProAudioProcessorEditor::resized()
         return;
     }
 
-    // Vista normal completa (1260 x 790)
-    // Left Rack (24 .. 288)
-    btVocalMod.setBounds(28, 120, 250, 24);
-    cbVocalIn.setBounds(28, 152, 120, 24);
-    cbVocalTarget.setBounds(158, 152, 120, 24);
-    lbVocalIn.setBounds(34, 184, 100, 16);   slVocalIn.setBounds(42, 200, 84, 78);
-    lbVocalOut.setBounds(164, 184, 100, 16); slVocalOut.setBounds(172, 200, 84, 78);
+    // Left Rack
+    btVocalMod.setBounds(32, 138, 248, 22);
+    cbVocalIn.setBounds(32, 166, 118, 24);
+    cbVocalTarget.setBounds(160, 166, 120, 24);
+    lbVocalIn.setBounds(36, 196, 100, 16);   slVocalIn.setBounds(44, 212, 82, 76);
+    lbVocalOut.setBounds(166, 196, 100, 16); slVocalOut.setBounds(174, 212, 82, 76);
 
-    cbSource.setBounds(28, 294, 120, 24);
-    cbMonitor.setBounds(158, 294, 120, 24);
-    cbRoom.setBounds(28, 330, 120, 24);
-    cbWalls.setBounds(158, 330, 120, 24);
+    cbSource.setBounds(32, 298, 118, 24);
+    cbMonitor.setBounds(160, 298, 120, 24);
+    cbRoom.setBounds(32, 330, 118, 24);
+    cbWalls.setBounds(160, 330, 120, 24);
 
-    cbCircuit.setBounds(28, 386, 250, 24);
-    lbDrive.setBounds(28, 420, 250, 16);
-    slDrive.setBounds(110, 440, 86, 82);
+    cbCircuit.setBounds(32, 376, 248, 24);
+    lbDrive.setBounds(32, 408, 248, 16);
+    slDrive.setBounds(115, 426, 82, 80);
 
-    // Center Stage (304 .. 956)
-    btMainStereo.setBounds(726, 114, 112, 22);
-    btRoomOn.setBounds(846, 114, 106, 22);
-    stagePad.setBounds(304, 142, 650, 300);
+    // Center Stage
+    btMainStereo.setBounds(732, 114, 112, 22);
+    btRoomOn.setBounds(848, 114, 104, 22);
+    stagePad.setBounds(306, 140, 648, 298);
 
-    const int micY = 450;
+    const int micY = 446;
     for (int i = 0; i < 4; ++i)
     {
-        const int x = 308 + i * 112;
-        btMicSelect[i].setBounds(x, micY, 88, 20);
-        slMicGain[i].setBounds(x + 4, micY + 22, 76, 74);
-        btMicSolo[i].setBounds(x + 82, micY + 42, 24, 22);
+        const int x = 310 + i * 111;
+        btMicSelect[i].setBounds(x, micY, 86, 20);
+        slMicGain[i].setBounds(x + 4, micY + 22, 74, 72);
+        btMicSolo[i].setBounds(x + 80, micY + 42, 24, 22);
     }
-    lbPairWide.setBounds(762, micY, 86, 18); slPairWide.setBounds(768, micY + 20, 76, 74);
-    lbFarWide.setBounds(862, micY, 86, 18);  slFarWide.setBounds(868, micY + 20, 76, 74);
+    lbPairWide.setBounds(762, micY, 84, 18); slPairWide.setBounds(768, micY + 20, 74, 72);
+    lbFarWide.setBounds(860, micY, 84, 18);  slFarWide.setBounds(866, micY + 20, 74, 72);
 
-    // Right Rack: Echo Chambers (972 .. 1236)
-    btChamberOn.setBounds(1164, 114, 72, 22);
-    cbChamberModel.setBounds(976, 146, 260, 26);
-    lbChSend.setBounds(986, 204, 100, 16);  slChamberSend.setBounds(994, 222, 86, 82);
-    lbChDecay.setBounds(1126, 204, 100, 16); slChamberDecay.setBounds(1134, 222, 86, 82);
-    lbChPre.setBounds(986, 344, 100, 16);   slChamberPre.setBounds(994, 362, 86, 82);
-    lbChWidth.setBounds(1126, 344, 100, 16); slChamberWidth.setBounds(1134, 362, 86, 82);
+    // Right Rack: Echo Chambers
+    btChamberOn.setBounds(1158, 114, 72, 22);
+    cbChamberModel.setBounds(980, 142, 248, 26);
+    lbChSend.setBounds(988, 196, 100, 16);  slChamberSend.setBounds(996, 214, 84, 80);
+    lbChDecay.setBounds(1126, 196, 100, 16); slChamberDecay.setBounds(1134, 214, 84, 80);
+    lbChPre.setBounds(988, 336, 100, 16);   slChamberPre.setBounds(996, 354, 84, 80);
+    lbChWidth.setBounds(1126, 336, 100, 16); slChamberWidth.setBounds(1134, 354, 84, 80);
 
-    // Bottom Left: Console EQ (24 .. 596)
-    btEqOn.setBounds(508, 566, 82, 22);
-    cbEqModel.setBounds(30, 566, 220, 24);
-    lbHpf.setBounds(40, 606, 86, 16);  slHpf.setBounds(40, 624, 86, 82);
-    lbLow.setBounds(174, 606, 86, 16); slLowGain.setBounds(174, 624, 86, 82); cbLowFreq.setBounds(172, 716, 90, 24);
-    lbMid.setBounds(316, 606, 86, 16); slMidGain.setBounds(316, 624, 86, 82); cbMidFreq.setBounds(314, 716, 90, 24);
-    lbHigh.setBounds(458, 606, 86, 16); slHighGain.setBounds(458, 624, 86, 82); cbHighFreq.setBounds(456, 716, 90, 24);
+    // Bottom Left: Console EQ
+    btEqOn.setBounds(504, 562, 82, 22);
+    cbEqModel.setBounds(32, 562, 216, 24);
+    lbHpf.setBounds(42, 598, 86, 16);  slHpf.setBounds(42, 616, 84, 78);
+    lbLow.setBounds(176, 598, 86, 16); slLowGain.setBounds(176, 616, 84, 78); cbLowFreq.setBounds(174, 706, 88, 24);
+    lbMid.setBounds(316, 598, 86, 16); slMidGain.setBounds(316, 616, 84, 78); cbMidFreq.setBounds(314, 706, 88, 24);
+    lbHigh.setBounds(456, 598, 86, 16); slHighGain.setBounds(456, 616, 84, 78); cbHighFreq.setBounds(454, 706, 88, 24);
 
-    // Bottom Mid: Comp & Parallel (614 .. 1094)
-    btCompOn.setBounds(1002, 566, 88, 22);
-    cbCompModel.setBounds(620, 566, 165, 24);
-    btScLink.setBounds(796, 566, 94, 22);
-    btScFilter.setBounds(796, 594, 94, 22);
+    // Bottom Mid: Comp & Parallel
+    btCompOn.setBounds(998, 562, 88, 22);
+    cbCompModel.setBounds(618, 562, 164, 24);
+    btScLink.setBounds(792, 562, 92, 22);
+    btScFilter.setBounds(792, 590, 92, 22);
 
-    lbCompThresh.setBounds(624, 614, 90, 16); slCompThresh.setBounds(626, 632, 86, 82);
-    lbCompMix.setBounds(748, 614, 90, 16);    slCompMix.setBounds(750, 632, 86, 82);
+    lbCompThresh.setBounds(622, 610, 90, 16); slCompThresh.setBounds(624, 628, 84, 78);
+    lbCompMix.setBounds(744, 610, 90, 16);    slCompMix.setBounds(746, 628, 84, 78);
 
-    btParCrush.setBounds(918, 594, 110, 22);
-    lbParBlend.setBounds(924, 622, 96, 16);
-    slParBlend.setBounds(930, 638, 82, 76);
-    cbParRoute.setBounds(914, 718, 126, 24);
+    btParCrush.setBounds(914, 590, 110, 22);
+    lbParBlend.setBounds(920, 618, 96, 16);
+    slParBlend.setBounds(926, 634, 80, 72);
+    cbParRoute.setBounds(910, 712, 126, 24);
 
-    // Bottom Right: Master (1110 .. 1236)
-    lbOutput.setBounds(1130, 608, 90, 16);
-    slOutput.setBounds(1132, 628, 88, 86);
+    // Bottom Right: Master
+    lbOutput.setBounds(1128, 604, 90, 16);
+    slOutput.setBounds(1130, 624, 86, 82);
 }

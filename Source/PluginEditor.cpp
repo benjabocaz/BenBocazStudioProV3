@@ -601,11 +601,10 @@ BenBocazStudioProAudioProcessorEditor::BenBocazStudioProAudioProcessorEditor(Ben
     addCombo(cbCircuit, "circuit");
     addKnob(slDrive, "drive");           setupLabel(lbDrive, "TUBE / TAPE DRIVE");
 
-    // 4 Mics strip + seleccion y activacion automatica al mover la perilla de ganancia
-    static constexpr const char* micBtnNames[4]    = { "1: MAIN", "2: ROOM/AIR", "3: FAR L", "4: FAR R" };
-    static constexpr const char* micGainIds[4]     = { "mic1Gain", "mic2Gain", "mic3Gain", "mic4Gain" };
-    static constexpr const char* micActiveIds[4]   = { "mic1Active", "mic2Active", "mic3Active", "mic4Active" };
-    static constexpr const char* micSoloIds[4]     = { "mic1Solo", "mic2Solo", "mic3Solo", "mic4Solo" };
+    // 4 Mics strip + seleccion automatica al mover la perilla de ganancia
+    static constexpr const char* micBtnNames[4] = { "1: MAIN", "2: ROOM/AIR", "3: FAR L", "4: FAR R" };
+    static constexpr const char* micGainIds[4]  = { "mic1Gain", "mic2Gain", "mic3Gain", "mic4Gain" };
+    static constexpr const char* micSoloIds[4]  = { "mic1Solo", "mic2Solo", "mic3Solo", "mic4Solo" };
 
     for (int i = 0; i < 4; ++i)
     {
@@ -613,15 +612,9 @@ BenBocazStudioProAudioProcessorEditor::BenBocazStudioProAudioProcessorEditor(Ben
         btMicSelect[i].onClick = [this, i]() { stagePad.setSelectedMic(i); };
         addAndMakeVisible(btMicSelect[i]);
         addKnob(slMicGain[i], micGainIds[i]);
-        slMicGain[i].onValueChange = [this, i, activeId = micActiveIds[i]]()
+        slMicGain[i].onValueChange = [this, i]()
         {
             stagePad.setSelectedMic(i);
-            if (slMicGain[i].getValue() > 0.01)
-            {
-                if (auto* actParam = dynamic_cast<juce::AudioParameterBool*>(processor.apvts.getParameter(activeId)))
-                    if (!actParam->get())
-                        actParam->setValueNotifyingHost(true);
-            }
         };
         btMicSolo[i].setButtonText("S");
         addToggle(btMicSolo[i], micSoloIds[i]);

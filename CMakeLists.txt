@@ -6,7 +6,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version" FORCE)
 
-# Si tienes JUCE como submódulo en la carpeta JUCE/ o extern/JUCE
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/JUCE/CMakeLists.txt")
     add_subdirectory(JUCE)
 elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/extern/JUCE/CMakeLists.txt")
@@ -32,7 +31,7 @@ juce_add_plugin(BenBocazStudioPro
     COPY_PLUGIN_AFTER_BUILD FALSE
     PLUGIN_MANUFACTURER_CODE Lac1
     PLUGIN_CODE Lacp
-    FORMATS AU VST3 Standalone
+    FORMATS AU
     PRODUCT_NAME "Los Andes Capital"
 )
 
@@ -55,7 +54,6 @@ target_include_directories(BenBocazStudioPro
         Source/DSP
 )
 
-# Recursos gráficos desde Assets/
 file(GLOB_RECURSE CUSTOM_ASSET_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/Assets/*.jpg"
     "${CMAKE_CURRENT_SOURCE_DIR}/Assets/*.jpeg"

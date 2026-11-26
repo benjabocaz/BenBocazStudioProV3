@@ -6,7 +6,7 @@
 #include <atomic>
 
 //==============================================================================
-// Filtro Biquad Estéreo (cero allocations en el hilo de audio)
+// Filtro Biquad Estéreo (mantenido para compatibilidad con AcousticEngine y Processor)
 //==============================================================================
 class StereoBiquad
 {
@@ -125,7 +125,128 @@ private:
 };
 
 //==============================================================================
-// Etapa de Preamp Analógico con Histéresis, Respuesta a Transitorios y Sag
+// Filtro TPT State Variable Filter (Zero-Delay Feedback - estilo Cytomic)
+// Estabilidad absoluta bajo modulación/automatización y precisión analógica a 4x OS
+//==============================================================================
+class TptSvfStereo
+{
+public:
+    void prepare (double sampleRate)
+    {
+        sr = sampleRate > 0.0 ? sampleRate : 176400.0;
+        reset();
+    }
+
+    void reset()
+    {
+        ic1eq = { 0.0f, 0.0f };
+        ic2eq = { 0.0f, 0.0f };
+        hp1State = { 0.0f, 0.0f };
+    }
+
+    void setBypass()
+    {
+        active = false;
+        thirdOrderHp = false;
+    }
+
+    void setHighPass (float freq, float q = 0.7071f, bool is18dB = false)
+    {
+        active = true;
+        thirdOrderHp = is18dB;
+        freq = std::clamp (freq, 18.0f, static_cast<float> (sr * 0.44));
+        const float g = std::tan (juce::MathConstants<float>::pi * freq / static_cast<float> (sr));
+        const float k = 1.0f / std::max (0.1f, q);
+        a1 = 1.0f / (1.0f + g * (g + k));
+        a2 = g * a1;
+        a3 = g * a2;
+        m0 = 1.0f; m1 = -k; m2 = -1.0f;
+
+        // Polo extra para 18 dB/octava (estilo Neve 1073 / SSL 4000E)
+        hp1Coeff = g / (1.0f + g);
+    }
+
+    void setBell (float freq, float gainDb, float q = 1.0f)
+    {
+        if (std::abs (gainDb) < 0.01f) { setBypass(); return; }
+        active = true;
+        thirdOrderHp = false;
+        freq = std::clamp (freq, 20.0f, static_cast<float> (sr * 0.44));
+        const float A = std::pow (10.0f, gainDb / 40.0f);
+        const float g = std::tan (juce::MathConstants<float>::pi * freq / static_cast<float> (sr));
+        const float k = 1.0f / (std::max (0.1f, q) * A);
+        a1 = 1.0f / (1.0f + g * (g + k));
+        a2 = g * a1;
+        a3 = g * a2;
+        m0 = 1.0f; m1 = k * (A * A - 1.0f); m2 = 0.0f;
+    }
+
+    void setLowShelf (float freq, float gainDb, float q = 0.7071f)
+    {
+        if (std::abs (gainDb) < 0.01f) { setBypass(); return; }
+        active = true;
+        thirdOrderHp = false;
+        freq = std::clamp (freq, 20.0f, static_cast<float> (sr * 0.44));
+        const float A = std::pow (10.0f, gainDb / 40.0f);
+        const float g = std::tan (juce::MathConstants<float>::pi * freq / static_cast<float> (sr)) / std::sqrt (A);
+        const float k = 1.0f / std::max (0.25f, q);
+        a1 = 1.0f / (1.0f + g * (g + k));
+        a2 = g * a1;
+        a3 = g * a2;
+        m0 = 1.0f; m1 = k * (A - 1.0f); m2 = (A * A - 1.0f);
+    }
+
+    void setHighShelf (float freq, float gainDb, float q = 0.7071f)
+    {
+        if (std::abs (gainDb) < 0.01f) { setBypass(); return; }
+        active = true;
+        thirdOrderHp = false;
+        freq = std::clamp (freq, 20.0f, static_cast<float> (sr * 0.44));
+        const float A = std::pow (10.0f, gainDb / 40.0f);
+        const float g = std::tan (juce::MathConstants<float>::pi * freq / static_cast<float> (sr)) * std::sqrt (A);
+        const float k = 1.0f / std::max (0.25f, q);
+        a1 = 1.0f / (1.0f + g * (g + k));
+        a2 = g * a1;
+        a3 = g * a2;
+        m0 = A * A; m1 = k * (1.0f - A) * A; m2 = (1.0f - A * A);
+    }
+
+    inline float processSample (int ch, float v0) noexcept
+    {
+        if (! active) return v0;
+        const auto c = static_cast<size_t> (ch & 1);
+
+        const float v3 = v0 - ic2eq[c];
+        const float v1 = a1 * ic1eq[c] + a2 * v3;
+        const float v2 = ic2eq[c] + a2 * ic1eq[c] + a3 * v3;
+        ic1eq[c] = 2.0f * v1 - ic1eq[c];
+        ic2eq[c] = 2.0f * v2 - ic2eq[c];
+
+        float out = m0 * v0 + m1 * v1 + m2 * v2;
+
+        if (thirdOrderHp)
+        {
+            const float lp = hp1State[c] + hp1Coeff * (out - hp1State[c]);
+            hp1State[c] = 2.0f * lp - hp1State[c];
+            out -= lp;
+        }
+        return out;
+    }
+
+private:
+    double sr = 176400.0;
+    bool active = false;
+    bool thirdOrderHp = false;
+    float a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
+    float m0 = 1.0f, m1 = 0.0f, m2 = 0.0f;
+    float hp1Coeff = 0.0f;
+    std::array<float, 2> ic1eq { 0.0f, 0.0f };
+    std::array<float, 2> ic2eq { 0.0f, 0.0f };
+    std::array<float, 2> hp1State { 0.0f, 0.0f };
+};
+
+//==============================================================================
+// Etapa de Preamp Analógico de Alta Gama (Transformador, Válvula, Op-Amp Discreto)
 //==============================================================================
 class AnalogPreampStage
 {
@@ -133,24 +254,26 @@ public:
     void prepare (double oversampledRate)
     {
         sr = oversampledRate > 0.0 ? oversampledRate : 176400.0;
-        lowCoeff   = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 150.0f   / static_cast<float> (sr));
-        midCoeff   = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 1850.0f  / static_cast<float> (sr));
-        highCoeff  = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 11200.0f / static_cast<float> (sr));
-        sagAtkCoeff = 1.0f - std::exp (-1.0f / (0.004f * static_cast<float> (sr)));
-        sagRelCoeff = 1.0f - std::exp (-1.0f / (0.034f * static_cast<float> (sr)));
-        hystCoeff  = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 660.0f   / static_cast<float> (sr));
+        const float fs = static_cast<float> (sr);
+        lowCoeff    = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 115.0f   / fs);
+        midCoeff    = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 1750.0f  / fs);
+        highCoeff   = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 12500.0f / fs);
+        fluxCoeff   = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 85.0f    / fs);
+        sagAtkCoeff = 1.0f - std::exp (-1.0f / (0.0025f * fs));
+        sagRelCoeff = 1.0f - std::exp (-1.0f / (0.0450f * fs));
         reset();
     }
 
     void reset()
     {
-        lowState  = { 0.0f, 0.0f };
-        midState  = { 0.0f, 0.0f };
-        highState = { 0.0f, 0.0f };
-        fluxState = { 0.0f, 0.0f };
-        sagEnv    = { 0.0f, 0.0f };
-        dcIn      = { 0.0f, 0.0f };
-        dcOut     = { 0.0f, 0.0f };
+        lowState.fill (0.0f);
+        midState.fill (0.0f);
+        highState.fill (0.0f);
+        fluxState.fill (0.0f);
+        prevSample.fill (0.0f);
+        sagEnv.fill (0.0f);
+        dcIn.fill (0.0f);
+        dcOut.fill (0.0f);
     }
 
     inline float processSample (int ch, float x, int circuit, float drive, bool speakerBreakup) noexcept
@@ -158,6 +281,7 @@ public:
         const auto c = static_cast<size_t> (ch & 1);
         const float d = std::clamp (drive, 0.0f, 1.0f);
 
+        // Separación de bandas para comportamiento dependiente de frecuencia
         lowState[c]  += lowCoeff  * (x - lowState[c]);
         midState[c]  += midCoeff  * (x - midState[c]);
         highState[c] += highCoeff * (x - highState[c]);
@@ -166,60 +290,76 @@ public:
         const float mids  = midState[c] - lowState[c];
         const float highs = x - highState[c];
 
-        // Seguimiento asimétrico de envolvente: ataque rápido en transitorios, recuperación orgánica
+        // Envolvente rápida/lenta para Sag de fuente de poder y Dynamic Cathode Bias
         const float absX = std::abs (x);
         const float sCoeff = (absX > sagEnv[c]) ? sagAtkCoeff : sagRelCoeff;
         sagEnv[c] += sCoeff * (absX - sagEnv[c]);
 
-        const float hystAmount = (circuit == 0 ? 0.35f : (circuit == 1 ? 0.25f : (circuit == 2 ? 0.29f : 0.10f))) * d;
-        fluxState[c] += hystCoeff * (x - fluxState[c]);
-        const float dFlux = (x - fluxState[c]) * hystAmount;
+        // Flujo magnético del transformador (satura más en frecuencias bajas: B ~ V/f)
+        fluxState[c] += fluxCoeff * (x - fluxState[c]);
+        const float coreFlux = std::tanh (fluxState[c] * (1.0f + d * 2.8f)) / (1.0f + d * 1.4f);
+        const float hystDiff = (x - fluxState[c]);
+
+        // Slew-rate (derivada de transitorios)
+        const float dx = x - prevSample[c];
+        prevSample[c] = x;
 
         float y = x;
 
-        if (circuit == 0) // NEVE CLASS-A
+        if (circuit == 0) // NEVE CLASS-A (Transformador Marinair + Clase A asimétrica)
         {
-            const float pre = 1.0f + d * 3.05f;
-            const float xFed = (x + lows * (0.42f * d) + dFlux * 1.45f) * pre;
-            const float bias = 0.11f * d + 0.055f * d * sagEnv[c];
+            const float pre = 1.0f + d * 3.10f;
+            // Empuje de flujo en graves + leve suavizado de agudos por pérdidas de hierro
+            const float xFed = (x + lows * (0.36f * d) + coreFlux * (0.32f * d) + hystDiff * (0.12f * d)) * pre;
+            const float bias = 0.14f * d + 0.08f * d * sagEnv[c];
             const float shaped = std::tanh (xFed + bias) - std::tanh (bias);
-            const float warm = shaped - highs * (0.13f * d) + fluxState[c] * (0.18f * d);
-            y = warm / (1.0f + d * 1.32f);
+            const float ironLoss = shaped - highs * (0.14f * d);
+            y = ironLoss / (1.0f + d * 1.42f);
         }
-        else if (circuit == 1) // PULTEC 12AX7
+        else if (circuit == 1) // PULTEC 12AX7 (Tríodo asimétrico + Dynamic Cathode Bias + Sag)
         {
-            const float sag = 1.0f / (1.0f + sagEnv[c] * 0.52f * d);
-            const float pre = (1.0f + d * 2.80f) * sag;
-            const float xIn = (x + dFlux * 0.85f) * pre;
+            const float sag = 1.0f / (1.0f + sagEnv[c] * 0.58f * d);
+            const float pre = (1.0f + d * 2.85f) * sag;
+            const float cathodeShift = 0.16f * d * sagEnv[c];
+            const float xIn = (x + coreFlux * (0.18f * d)) * pre - cathodeShift;
+
             float shaped = 0.0f;
             if (xIn >= 0.0f)
-                shaped = std::tanh (xIn * 1.22f) / 1.22f;
+                shaped = std::tanh (xIn * 1.28f) / 1.28f; // Conducción de rejilla suave
             else
-                shaped = (2.0f / juce::MathConstants<float>::pi) * std::atan (xIn * 0.94f) * 1.16f;
-            y = (shaped + highs * (0.10f * d)) / (1.0f + d * 1.15f);
+                shaped = (2.0f / juce::MathConstants<float>::pi) * std::atan (xIn * 0.88f) * 1.18f; // Corte de placa más redondo
+
+            y = (shaped + cathodeShift * 0.35f + highs * (0.09f * d)) / (1.0f + d * 1.18f);
         }
-        else if (circuit == 2) // API 2520
+        else if (circuit == 2) // API 2520 (Op-Amp discreto + Slew-rate limiting + Transformador de salida)
         {
-            const float pre = 1.0f + d * 3.35f;
-            const float xFed = (x - lows * (0.14f * d) + mids * (0.48f * d) + dFlux * 1.15f) * pre;
+            const float pre = 1.0f + d * 3.45f;
+            // Slew-rate limiting sutil en transitorios muy rápidos
+            const float maxSlew = juce::jmap (d, 0.0f, 1.0f, 0.95f, 0.24f);
+            const float slewLim = std::tanh (dx / maxSlew) * maxSlew;
+            const float xSlew = (x - dx) + slewLim;
+
+            const float xFed = (xSlew - lows * (0.10f * d) + mids * (0.44f * d) + coreFlux * (0.22f * d)) * pre;
+            // Armónicos impares marcados y con pegada
             const float shaped = xFed / std::sqrt (1.0f + xFed * xFed);
-            y = (shaped + lows * (0.13f * d)) / (1.0f + d * 1.40f);
+            y = (shaped + lows * (0.12f * d)) / (1.0f + d * 1.48f);
         }
-        else // SSL CLEAN
+        else // SSL CLEAN (VCA / Consola transparente con micro-armónicos de bus)
         {
-            const float pre = 1.0f + d * 1.50f;
-            const float xIn = (x + dFlux * 0.35f) * pre;
-            const float shaped = 0.65f * std::tanh (xIn) + 0.35f * (xIn / std::sqrt (1.0f + 0.5f * xIn * xIn));
-            y = (shaped + highs * (0.11f * d)) / (1.0f + d * 0.72f);
+            const float pre = 1.0f + d * 1.45f;
+            const float xIn = (x + hystDiff * (0.06f * d)) * pre;
+            const float shaped = 0.60f * std::tanh (xIn) + 0.40f * (xIn / std::sqrt (1.0f + 0.45f * xIn * xIn));
+            y = (shaped + highs * (0.08f * d)) / (1.0f + d * 0.68f);
         }
 
         if (speakerBreakup)
         {
-            const float spkIn = y * (1.32f + d * 0.62f) + dFlux * 0.75f;
+            const float spkIn = y * (1.30f + d * 0.60f) + coreFlux * 0.35f;
             const float spkSat = std::tanh (spkIn + 0.05f * d);
             y = 0.72f * spkSat + 0.28f * y;
         }
 
+        // DC Blocker limpio
         const float dc = y - dcIn[c] + 0.9994f * dcOut[c];
         dcIn[c] = y;
         dcOut[c] = dc;
@@ -228,15 +368,10 @@ public:
 
 private:
     double sr = 176400.0;
-    float lowCoeff = 0.005f, midCoeff = 0.06f, highCoeff = 0.30f;
-    float sagAtkCoeff = 0.0014f, sagRelCoeff = 0.00017f, hystCoeff = 0.024f;
-    std::array<float, 2> lowState  { 0.0f, 0.0f };
-    std::array<float, 2> midState  { 0.0f, 0.0f };
-    std::array<float, 2> highState { 0.0f, 0.0f };
-    std::array<float, 2> fluxState { 0.0f, 0.0f };
-    std::array<float, 2> sagEnv    { 0.0f, 0.0f };
-    std::array<float, 2> dcIn      { 0.0f, 0.0f };
-    std::array<float, 2> dcOut     { 0.0f, 0.0f };
+    float lowCoeff = 0.004f, midCoeff = 0.06f, highCoeff = 0.35f, fluxCoeff = 0.003f;
+    float sagAtkCoeff = 0.002f, sagRelCoeff = 0.00012f;
+    std::array<float, 2> lowState {}, midState {}, highState {}, fluxState {}, prevSample {};
+    std::array<float, 2> sagEnv {}, dcIn {}, dcOut {};
 };
 
 //==============================================================================
@@ -263,11 +398,8 @@ public:
     {
         for (int ch = 0; ch < 2; ++ch)
         {
-            hpf[ch].reset();
-            lpf[ch].reset();
-            cabBox[ch].reset();
-            coneEdge[ch].reset();
-            harshBit[ch].reset();
+            hpf[ch].reset(); lpf[ch].reset();
+            cabBox[ch].reset(); coneEdge[ch].reset(); harshBit[ch].reset();
         }
     }
 
@@ -279,17 +411,13 @@ public:
 
         for (int ch = 0; ch < 2; ++ch)
         {
-            hpf[ch].setBypass();
-            lpf[ch].setBypass();
-            cabBox[ch].setBypass();
-            coneEdge[ch].setBypass();
-            harshBit[ch].setBypass();
+            hpf[ch].setBypass(); lpf[ch].setBypass();
+            cabBox[ch].setBypass(); coneEdge[ch].setBypass(); harshBit[ch].setBypass();
         }
 
         if (sourceIdx == 4) // GUITAR CAB (MONO)
         {
             active = true;
-            stereoSpreadAmount = 0.0f;
             for (int ch = 0; ch < 2; ++ch)
             {
                 hpf[ch].setHighPass (92.0f, 0.78f);
@@ -319,7 +447,6 @@ public:
         else if (sourceIdx == 6) // BASS AMP (LOW END)
         {
             active = true;
-            stereoSpreadAmount = 0.0f;
             for (int ch = 0; ch < 2; ++ch)
             {
                 hpf[ch].setHighPass (36.0f, 0.82f);
@@ -385,7 +512,7 @@ private:
 };
 
 //==============================================================================
-// EQ de Consola Analógica con Frecuencias Seleccionables (4x Oversampled)
+// EQ de Consola Analógica TPT-SVF (4x Oversampled) con Inductor Saturation
 //==============================================================================
 class ConsoleEqWithTubeStage
 {
@@ -393,8 +520,11 @@ public:
     void prepare (double oversampledRate)
     {
         sr = oversampledRate > 0.0 ? oversampledRate : 176400.0;
-        hpf.prepare (sr); low.prepare (sr); pultecDip.prepare (sr);
-        mid.prepare (sr); high.prepare (sr);
+        hpf.prepare (sr);
+        low.prepare (sr);
+        pultecDip.prepare (sr);
+        mid.prepare (sr);
+        high.prepare (sr);
         reset();
     }
 
@@ -417,37 +547,45 @@ public:
         const float fMid  = midFreqs[static_cast<size_t> (std::clamp (midFreqIdx, 0, 3))];
         const float fHigh = highFreqs[static_cast<size_t> (std::clamp (highFreqIdx, 0, 2))];
 
-        if (hpfHz > 22.0f) hpf.setHighPass (hpfHz, 0.7071f);
-        else               hpf.setBypass();
+        currentModel = eqModel;
+        midInductorDrive = (eqModel == 0 && std::abs (midDb) > 1.0f) ? std::clamp (std::abs (midDb) * 0.025f, 0.0f, 0.28f) : 0.0f;
+
+        // HPF de 18 dB/oct para Neve 1073 y SSL 4000E; 12 dB/oct para Pultec y API
+        if (hpfHz > 22.0f)
+            hpf.setHighPass (hpfHz, (eqModel == 0 || eqModel == 3) ? 0.78f : 0.7071f, (eqModel == 0 || eqModel == 3));
+        else
+            hpf.setBypass();
 
         pultecDip.setBypass();
 
-        if (eqModel == 0) // Neve 1073
+        if (eqModel == 0) // NEVE 1073 (Inductor British: shelves musicales + medios anchos)
         {
-            low.setLowShelf (fLow, lowDb);
-            mid.setPeak (fMid, midDb, 0.85f);
-            high.setHighShelf (fHigh, highDb);
+            low.setLowShelf (fLow, lowDb, 0.64f);
+            mid.setBell (fMid, midDb, 0.78f + std::abs (midDb) * 0.02f);
+            high.setHighShelf (fHigh, highDb, 0.62f);
         }
-        else if (eqModel == 1) // Pultec EQP-1A
+        else if (eqModel == 1) // PULTEC EQP-1A (Curva pasiva + Pultec Low-End Trick)
         {
-            low.setLowShelf (fLow * 0.92f, lowDb * 1.10f);
-            if (lowDb > 0.5f)
-                pultecDip.setPeak (fLow * 2.45f, -lowDb * 0.36f, 1.15f);
-            mid.setPeak (fMid, midDb, 0.65f);
-            high.setHighShelf (fHigh, highDb * 1.05f);
+            low.setLowShelf (fLow * 0.90f, lowDb * 1.12f, 0.56f);
+            if (lowDb > 0.4f)
+                pultecDip.setBell (fLow * 2.55f, -lowDb * 0.38f, 1.10f);
+            mid.setBell (fMid, midDb, 0.62f);
+            high.setHighShelf (fHigh * 0.95f, highDb * 1.06f, 0.55f);
         }
-        else if (eqModel == 2) // API 550A
+        else if (eqModel == 2) // API 550A (Proportional-Q real en todas las bandas)
         {
-            const float propQ = 0.90f + std::abs (midDb) * 0.09f;
-            low.setLowShelf (fLow, lowDb);
-            mid.setPeak (fMid, midDb, propQ);
-            high.setHighShelf (fHigh * 0.90f, highDb);
+            const float lowQ  = 0.62f + std::abs (lowDb)  * 0.045f;
+            const float midQ  = 0.75f + std::abs (midDb)  * 0.115f;
+            const float highQ = 0.62f + std::abs (highDb) * 0.045f;
+            low.setLowShelf (fLow, lowDb, lowQ);
+            mid.setBell (fMid, midDb, midQ);
+            high.setHighShelf (fHigh * 0.92f, highDb, highQ);
         }
-        else // SSL 4000E
+        else // SSL 4000E (Black Knob: quirúrgico, pegada controlada)
         {
-            low.setLowShelf (fLow, lowDb);
-            mid.setPeak (fMid, midDb, 1.55f);
-            high.setHighShelf (fHigh, highDb);
+            low.setLowShelf (fLow, lowDb, 0.85f);
+            mid.setBell (fMid, midDb, 1.65f);
+            high.setHighShelf (fHigh, highDb, 0.82f);
         }
     }
 
@@ -456,17 +594,33 @@ public:
         x = hpf.processSample (ch, x);
         x = low.processSample (ch, x);
         x = pultecDip.processSample (ch, x);
-        x = mid.processSample (ch, x);
+
+        if (midInductorDrive > 0.001f)
+        {
+            const float preMid = x;
+            const float postMid = mid.processSample (ch, x);
+            const float midDelta = postMid - preMid;
+            // Micro-saturación magnética del inductor solo sobre la banda media impulsada
+            const float satDelta = std::tanh (midDelta * (1.0f + midInductorDrive * 2.2f)) / (1.0f + midInductorDrive * 2.2f);
+            x = preMid + satDelta;
+        }
+        else
+        {
+            x = mid.processSample (ch, x);
+        }
+
         x = high.processSample (ch, x);
     }
 
 private:
     double sr = 176400.0;
-    StereoBiquad hpf, low, pultecDip, mid, high;
+    int currentModel = 0;
+    float midInductorDrive = 0.0f;
+    TptSvfStereo hpf, low, pultecDip, mid, high;
 };
 
 //==============================================================================
-// Compresor Clásico (Principal con MIX/SC y Paralelo Crush)
+// Compresor Vintage de Alta Gama (Feedback 1176/LA-2A, Vari-Mu, Auto-Makeup)
 //==============================================================================
 class VintageCompressor
 {
@@ -476,87 +630,146 @@ public:
         sr = sampleRate > 0.0 ? sampleRate : 44100.0;
         scHpf.prepare (sr);
         scHpf.setHighPass (120.0f, 0.7071f);
+        optoEmph.prepare (sr);
+        optoEmph.setHighShelf (2800.0f, 3.2f); // Énfasis clásico R37 del LA-2A
+        rmsCoeff = 1.0f - std::exp (-1.0f / (0.012f * static_cast<float> (sr)));
         reset();
     }
 
     void reset()
     {
-        envFast = { 0.0f, 0.0f };
-        envSlow = { 0.0f, 0.0f };
+        envFast.fill (0.0f);
+        envSlow.fill (0.0f);
+        rmsSq.fill (0.0f);
+        fbOut.fill (0.0f);
         scHpf.reset();
+        optoEmph.reset();
         gainReductionDb.store (0.0f);
     }
 
     void configure (int compType, float thresholdDb, bool useScFilter, bool linkStereo)
     {
+        model = compType;
         thresh = thresholdDb;
         scFilterOn = useScFilter;
         stereoLinked = linkStereo;
 
-        if (compType == 0) // 1176LN (FET)
+        if (compType == 0) // 1176LN (FET Feedback)
         {
-            ratio = 6.0f; attackMs = 0.45f; relFastMs = 55.0f; relSlowMs = 55.0f;
-            kneeDb = 2.0f; makeupDb = 2.0f; isOpto = false;
+            ratio = 6.0f; attackMs = 0.35f; relFastMs = 48.0f; relSlowMs = 140.0f;
+            kneeDb = 2.5f; isFeedback = true; isOpto = false; isVariMu = false;
+            // Auto-makeup musical calibrado al umbral
+            makeupDb = std::clamp ((-thresholdDb - 10.0f) * 0.24f, 0.0f, 7.5f);
         }
-        else if (compType == 1) // LA-2A (Opto)
+        else if (compType == 1) // LA-2A (Opto T4B Feedback con memoria)
         {
-            ratio = 3.2f; attackMs = 10.0f; relFastMs = 65.0f; relSlowMs = 520.0f;
-            kneeDb = 6.0f; makeupDb = 1.5f; isOpto = true;
+            ratio = 3.5f; attackMs = 9.5f; relFastMs = 62.0f; relSlowMs = 680.0f;
+            kneeDb = 7.0f; isFeedback = true; isOpto = true; isVariMu = false;
+            makeupDb = std::clamp ((-thresholdDb - 10.0f) * 0.20f, 0.0f, 6.0f);
         }
-        else if (compType == 2) // Mastering (Tube)
+        else if (compType == 2) // Mastering (Vari-Mu Tube Feedforward/RMS)
         {
-            ratio = 2.2f; attackMs = 18.0f; relFastMs = 165.0f; relSlowMs = 165.0f;
-            kneeDb = 8.0f; makeupDb = 1.0f; isOpto = false;
+            ratio = 2.0f; attackMs = 16.0f; relFastMs = 145.0f; relSlowMs = 420.0f;
+            kneeDb = 9.5f; isFeedback = false; isOpto = true; isVariMu = true;
+            makeupDb = std::clamp ((-thresholdDb - 12.0f) * 0.16f, 0.0f, 5.0f);
         }
-        else // Parallel Crush
+        else // Parallel Crush (1176 All-Buttons-In style)
         {
-            ratio = 12.0f; attackMs = 0.25f; relFastMs = 42.0f; relSlowMs = 110.0f;
-            kneeDb = 1.5f; makeupDb = 4.5f; isOpto = true;
+            ratio = 14.0f; attackMs = 0.20f; relFastMs = 38.0f; relSlowMs = 115.0f;
+            kneeDb = 1.5f; isFeedback = true; isOpto = true; isVariMu = false;
+            makeupDb = 5.0f;
         }
 
-        atkCoeff     = std::exp (-1.0f / (0.001f * attackMs  * static_cast<float> (sr)));
-        relFastCoeff = std::exp (-1.0f / (0.001f * relFastMs * static_cast<float> (sr)));
-        relSlowCoeff = std::exp (-1.0f / (0.001f * relSlowMs * static_cast<float> (sr)));
+        const float fs = static_cast<float> (sr);
+        atkCoeff     = std::exp (-1.0f / (0.001f * attackMs  * fs));
+        relFastCoeff = std::exp (-1.0f / (0.001f * relFastMs * fs));
+        relSlowCoeff = std::exp (-1.0f / (0.001f * relSlowMs * fs));
         makeupLin    = juce::Decibels::decibelsToGain (makeupDb);
     }
 
     inline void processStereoSample (float& inL, float& inR, float wetMix, float& frameMaxGr) noexcept
     {
-        const float detL = scFilterOn ? scHpf.processSample (0, inL) : inL;
-        const float detR = scFilterOn ? scHpf.processSample (1, inR) : inR;
+        // En topología Feedback (1176 / LA-2A) detectamos desde la salida previa (1 muestra a 4x OS)
+        float srcL = isFeedback ? fbOut[0] : inL;
+        float srcR = isFeedback ? fbOut[1] : inR;
+
+        float detL = scFilterOn ? scHpf.processSample (0, srcL) : srcL;
+        float detR = scFilterOn ? scHpf.processSample (1, srcR) : srcR;
+
+        if (model == 1) // Énfasis de frecuencias medias-altas en el sidechain del LA-2A
+        {
+            detL = optoEmph.processSample (0, detL);
+            detR = optoEmph.processSample (1, detR);
+        }
+
+        float grL = 0.0f, grR = 0.0f;
 
         if (stereoLinked)
         {
-            const float peak = std::max (std::abs (detL), std::abs (detR));
-            const float gr = computeChannelGr (0, peak);
-            const float gainLin = juce::Decibels::decibelsToGain (-gr) * makeupLin;
-            const float compL = inL * gainLin;
-            const float compR = inR * gainLin;
-            inL = inL * (1.0f - wetMix) + compL * wetMix;
-            inR = inR * (1.0f - wetMix) + compR * wetMix;
-            if (gr > frameMaxGr) frameMaxGr = gr;
+            const float detVal = (model == 2)
+                ? std::sqrt (0.5f * (detL * detL + detR * detR) + 1e-12f) // Suma RMS estéreo en Mastering
+                : std::max (std::abs (detL), std::abs (detR));
+            grL = grR = computeChannelGr (0, detVal);
         }
         else
         {
-            const float grL = computeChannelGr (0, std::abs (detL));
-            const float grR = computeChannelGr (1, std::abs (detR));
-            const float compL = inL * juce::Decibels::decibelsToGain (-grL) * makeupLin;
-            const float compR = inR * juce::Decibels::decibelsToGain (-grR) * makeupLin;
-            inL = inL * (1.0f - wetMix) + compL * wetMix;
-            inR = inR * (1.0f - wetMix) + compR * wetMix;
-            const float m = std::max (grL, grR);
-            if (m > frameMaxGr) frameMaxGr = m;
+            grL = computeChannelGr (0, std::abs (detL));
+            grR = computeChannelGr (1, std::abs (detR));
         }
+
+        const float gainL = juce::Decibels::decibelsToGain (-grL);
+        const float gainR = juce::Decibels::decibelsToGain (-grR);
+
+        float compL = inL * gainL;
+        float compR = inR * gainR;
+
+        // Guardamos la salida pre-makeup para el lazo Feedback real
+        fbOut[0] = compL;
+        fbOut[1] = compR;
+
+        // Color armónico sutil ligado a la reducción de ganancia (GR)
+        const float avgGr = 0.5f * (grL + grR);
+        if (avgGr > 0.25f)
+        {
+            const float grit = std::clamp (avgGr * 0.025f, 0.0f, 0.35f);
+            if (model == 0 || model == 3) // FET grit (armónicos impares)
+            {
+                compL = std::tanh (compL * (1.0f + grit * 1.35f)) / (1.0f + grit * 0.95f);
+                compR = std::tanh (compR * (1.0f + grit * 1.35f)) / (1.0f + grit * 0.95f);
+            }
+            else // Tube warmth (armónicos pares suaves)
+            {
+                const float bias = 0.04f * grit;
+                compL = std::tanh (compL + bias) - std::tanh (bias);
+                compR = std::tanh (compR + bias) - std::tanh (bias);
+            }
+        }
+
+        compL *= makeupLin;
+        compR *= makeupLin;
+
+        inL = inL * (1.0f - wetMix) + compL * wetMix;
+        inR = inR * (1.0f - wetMix) + compR * wetMix;
+
+        const float m = std::max (grL, grR);
+        if (m > frameMaxGr) frameMaxGr = m;
     }
 
     void publishGr (float maxGr) noexcept { gainReductionDb.store (maxGr); }
     float getGainReductionDb() const { return gainReductionDb.load(); }
 
 private:
-    inline float computeChannelGr (int ch, float peak) noexcept
+    inline float computeChannelGr (int ch, float detLevel) noexcept
     {
         const auto c = static_cast<size_t> (ch & 1);
-        const float levelDb = juce::Decibels::gainToDecibels (peak + 1e-6f);
+
+        // Detección híbrida Peak/RMS para Mastering y Opto
+        rmsSq[c] += rmsCoeff * (detLevel * detLevel - rmsSq[c]);
+        const float rmsVal = std::sqrt (std::max (0.0f, rmsSq[c]));
+        const float effectiveLevel = isVariMu ? (0.65f * rmsVal + 0.35f * detLevel)
+                                              : (isOpto ? (0.45f * rmsVal + 0.55f * detLevel) : detLevel);
+
+        const float levelDb = juce::Decibels::gainToDecibels (effectiveLevel + 1e-6f);
 
         float overDb = 0.0f;
         const float diff = levelDb - thresh;
@@ -567,34 +780,43 @@ private:
         else
             overDb = diff;
 
-        const float targetGrDb = overDb * (1.0f - 1.0f / ratio);
+        // Ratio dinámico en Vari-Mu (crece progresivamente con la intensidad del pico)
+        const float effRatio = isVariMu ? (1.45f + std::clamp (overDb * 0.22f, 0.0f, 3.2f)) : ratio;
+        const float targetGrDb = overDb * (1.0f - 1.0f / effRatio);
 
+        // Etapa rápida
         if (targetGrDb > envFast[c])
             envFast[c] = atkCoeff * envFast[c] + (1.0f - atkCoeff) * targetGrDb;
         else
             envFast[c] = relFastCoeff * envFast[c] + (1.0f - relFastCoeff) * targetGrDb;
 
-        float finalGrDb = envFast[c];
+        // Etapa lenta con memoria dependiente del programa (LA-2A / Mastering / Crush)
         if (isOpto)
         {
             if (targetGrDb > envSlow[c])
                 envSlow[c] = atkCoeff * envSlow[c] + (1.0f - atkCoeff) * targetGrDb;
             else
                 envSlow[c] = relSlowCoeff * envSlow[c] + (1.0f - relSlowCoeff) * targetGrDb;
-            finalGrDb = 0.55f * envFast[c] + 0.45f * envSlow[c];
+
+            const float slowWeight = (model == 1) ? 0.52f : 0.35f;
+            return (1.0f - slowWeight) * envFast[c] + slowWeight * envSlow[c];
         }
-        return finalGrDb;
+
+        return envFast[c];
     }
 
     double sr = 44100.0;
-    float thresh = -16.0f, ratio = 4.0f, attackMs = 0.6f, relFastMs = 55.0f, relSlowMs = 55.0f;
+    int model = 0;
+    float thresh = -16.0f, ratio = 4.0f, attackMs = 0.6f, relFastMs = 55.0f, relSlowMs = 150.0f;
     float kneeDb = 3.0f, makeupDb = 0.0f, makeupLin = 1.0f;
-    float atkCoeff = 0.9f, relFastCoeff = 0.99f, relSlowCoeff = 0.999f;
-    bool isOpto = false, scFilterOn = false, stereoLinked = true;
+    float atkCoeff = 0.9f, relFastCoeff = 0.99f, relSlowCoeff = 0.999f, rmsCoeff = 0.001f;
+    bool isFeedback = false, isOpto = false, isVariMu = false, scFilterOn = false, stereoLinked = true;
 
     std::array<float, 2> envFast { 0.0f, 0.0f };
     std::array<float, 2> envSlow { 0.0f, 0.0f };
-    StereoBiquad scHpf;
+    std::array<float, 2> rmsSq   { 0.0f, 0.0f };
+    std::array<float, 2> fbOut   { 0.0f, 0.0f };
+    StereoBiquad scHpf, optoEmph;
     std::atomic<float> gainReductionDb { 0.0f };
 };
 

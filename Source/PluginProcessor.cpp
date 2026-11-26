@@ -13,7 +13,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProAudioProces
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> p;
 
-    // Top bar
     p.push_back(std::make_unique<juce::AudioParameterChoice>("mode", "Mode", juce::StringArray{ "Re-Mic", "Insert" }, 0));
     p.push_back(std::make_unique<juce::AudioParameterChoice>("routing", "Routing", juce::StringArray{ "EQ -> Comp -> Chamber", "Chamber -> EQ -> Comp" }, 0));
     p.push_back(std::make_unique<juce::AudioParameterBool>("hqMode", "HQ 4x Mode", true));
@@ -24,7 +23,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProAudioProces
     p.push_back(std::make_unique<juce::AudioParameterBool>("mainStereo", "Main Stereo", false));
     p.push_back(std::make_unique<juce::AudioParameterBool>("roomOn", "Room On", true));
 
-    // Vocal Mic Mod & Room Setup (Volcano = 0 principal)
     p.push_back(std::make_unique<juce::AudioParameterBool>("vocalModOn", "Vocal Mic Mod", false));
     p.push_back(std::make_unique<juce::AudioParameterChoice>("vocalInMic", "Input Mic", juce::StringArray{ "Shure SM7B", "Neumann U87", "Condenser", "Shure SM58" }, 0));
     p.push_back(std::make_unique<juce::AudioParameterChoice>("vocalTargetMic", "Target Mic", juce::StringArray{ "Sony C-800G", "Neumann U47", "Telefunken 251", "U87 Vintage" }, 0));
@@ -36,11 +34,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProAudioProces
     p.push_back(std::make_unique<juce::AudioParameterChoice>("room", "Studio Room", juce::StringArray{ "Volcano Hall", "Shangri-La", "Canyon Room" }, 0));
     p.push_back(std::make_unique<juce::AudioParameterChoice>("walls", "Room Walls", juce::StringArray{ "Gates Open", "Gates Closed" }, 1));
 
-    // Tube / Tape Drive
     p.push_back(std::make_unique<juce::AudioParameterChoice>("circuit", "Tube Circuit", juce::StringArray{ "Neve Class-A", "API Discrete", "Ampex Tape" }, 0));
     p.push_back(std::make_unique<juce::AudioParameterFloat>("drive", "Tube Drive", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.20f));
 
-    // 4 Mics: 1:MAIN, 2:ROOM/AIR, 3:FAR L, 4:FAR R
     p.push_back(std::make_unique<juce::AudioParameterFloat>("mic1Gain", "1: Main", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 1.00f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>("mic2Gain", "2: Room/Air", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.25f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>("mic3Gain", "3: Far L", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.00f));
@@ -63,7 +59,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProAudioProces
     p.push_back(std::make_unique<juce::AudioParameterFloat>("pairWide", "Pair Wide", 0.0f, 1.0f, 1.0f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>("farWide", "Far Wide", 0.0f, 1.0f, 1.0f));
 
-    // Analog Console EQ
     p.push_back(std::make_unique<juce::AudioParameterBool>("eqOn", "EQ On", true));
     p.push_back(std::make_unique<juce::AudioParameterChoice>("eqModel", "EQ Model", juce::StringArray{ "Neve 1073 (British)", "API 550 (American)", "Pultec (Tube)" }, 0));
     p.push_back(std::make_unique<juce::AudioParameterFloat>("hpf", "HPF", juce::NormalisableRange<float>(20.0f, 300.0f, 1.0f, 0.45f), 20.0f));
@@ -74,7 +69,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProAudioProces
     p.push_back(std::make_unique<juce::AudioParameterFloat>("highGain", "High Gain", juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
     p.push_back(std::make_unique<juce::AudioParameterChoice>("highFreq", "High Freq", juce::StringArray{ "8 kHz", "12 kHz", "16 kHz" }, 1));
 
-    // Outboard & Parallel Comp
     p.push_back(std::make_unique<juce::AudioParameterBool>("compOn", "Comp On", true));
     p.push_back(std::make_unique<juce::AudioParameterChoice>("compModel", "Comp Model", juce::StringArray{ "1176LN (FET)", "LA-2A (Opto)", "SSL (VCA)", "Fairchild (Tube)" }, 0));
     p.push_back(std::make_unique<juce::AudioParameterFloat>("compThresh", "Threshold", juce::NormalisableRange<float>(-40.0f, 0.0f, 0.1f), -16.0f));
@@ -85,7 +79,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProAudioProces
     p.push_back(std::make_unique<juce::AudioParameterFloat>("parBlend", "Par Blend", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.35f));
     p.push_back(std::make_unique<juce::AudioParameterChoice>("parRoute", "Par Route", juce::StringArray{ "Room Mics", "Full Mix" }, 0));
 
-    // Echo Chambers
     p.push_back(std::make_unique<juce::AudioParameterBool>("chamberOn", "Chamber On", true));
     p.push_back(std::make_unique<juce::AudioParameterChoice>("chamberModel", "Echo Chamber", juce::StringArray{ "Chamber 1 (Tight)", "Chamber 2 (Warm)", "Chamber 3 (Classic)" }, 2));
     p.push_back(std::make_unique<juce::AudioParameterFloat>("chamberSend", "Send", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.18f));
@@ -93,7 +86,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProAudioProces
     p.push_back(std::make_unique<juce::AudioParameterFloat>("chamberPreDelay", "Pre-Delay", juce::NormalisableRange<float>(0.0f, 100.0f, 0.5f), 22.0f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>("chamberWidth", "Width", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 1.0f));
 
-    // Master
     p.push_back(std::make_unique<juce::AudioParameterFloat>("outputGain", "Output", juce::NormalisableRange<float>(-24.0f, 12.0f, 0.1f), 0.0f));
 
     return { p.begin(), p.end() };
@@ -134,8 +126,7 @@ void BenBocazStudioProAudioProcessor::processBlock(juce::AudioBuffer<float>& buf
 {
     juce::ScopedNoDenormals noDenormals;
     const int numSamples = buffer.getNumSamples();
-    if (numSamples == 0)
-        return;
+    if (numSamples == 0) return;
 
     auto getVal = [this](const char* id) { return apvts.getRawParameterValue(id)->load(); };
 
@@ -147,7 +138,6 @@ void BenBocazStudioProAudioProcessor::processBlock(juce::AudioBuffer<float>& buf
         setLatencySamples(targetLatency);
     }
 
-    // 1. Vocal Mic Modeler (EQ y saturacion suave propia de la etapa vocal)
     const bool vocalOn = getVal("vocalModOn") > 0.5f;
     vocalModeler.setParameters(vocalOn,
                                static_cast<int>(getVal("vocalInMic")),
@@ -156,7 +146,6 @@ void BenBocazStudioProAudioProcessor::processBlock(juce::AudioBuffer<float>& buf
                                getVal("vocalOutGain"));
     vocalModeler.processEQ(buffer);
 
-    // 2. Live Room 3D Stage (Volcano / Shangri-La / Canyon)
     std::array<BenBocazDSP::MicState, 4> mics;
     mics[0] = { getVal("mic1X"), getVal("mic1Y"), getVal("mic1Gain"), getVal("mic1Solo") > 0.5f };
     mics[1] = { getVal("mic2X"), getVal("mic2Y"), getVal("mic2Gain"), getVal("mic2Solo") > 0.5f };
@@ -174,15 +163,11 @@ void BenBocazStudioProAudioProcessor::processBlock(juce::AudioBuffer<float>& buf
                                getVal("farWide"),
                                mics);
 
-    // 3. Parallel Crush opcional (sobre Room Mics o Full Mix)
     if (getVal("parCrush") > 0.5f && getVal("parBlend") > 0.001f)
     {
         const bool routeRoom = (static_cast<int>(getVal("parRoute")) == 0);
         parCrushBuffer.setSize(2, numSamples, false, false, true);
-        if (routeRoom)
-            parCrushBuffer.makeCopyOf(roomOnlyBuffer, true);
-        else
-            parCrushBuffer.makeCopyOf(buffer, true);
+        parCrushBuffer.makeCopyOf(routeRoom ? roomOnlyBuffer : buffer, true);
 
         parallelComp.setParameters(BenBocazDSP::VintageCompressor::FET_1176, -28.0f, 1.0f, true, true, true);
         parallelComp.process(parCrushBuffer, true);
@@ -193,7 +178,6 @@ void BenBocazStudioProAudioProcessor::processBlock(juce::AudioBuffer<float>& buf
             buffer.addFrom(1, 0, parCrushBuffer, 1, 0, numSamples, blend);
     }
 
-    // 4. Console Chain (Drive + EQ + Comp con Auto-Gain) & Echo Chamber
     static constexpr float loHzTbl[3]  = { 60.0f, 110.0f, 220.0f };
     static constexpr float midHzTbl[4] = { 700.0f, 1600.0f, 3200.0f, 4800.0f };
     static constexpr float hiHzTbl[3]  = { 8000.0f, 12000.0f, 16000.0f };
@@ -210,8 +194,7 @@ void BenBocazStudioProAudioProcessor::processBlock(juce::AudioBuffer<float>& buf
                                       getVal("chamberWidth"));
     };
 
-    if (routing == 1)
-        runChamber();
+    if (routing == 1) runChamber();
 
     consoleChain.process(buffer, hq4x,
                          getVal("eqOn") > 0.5f,
@@ -228,13 +211,11 @@ void BenBocazStudioProAudioProcessor::processBlock(juce::AudioBuffer<float>& buf
                          getVal("scFilter") > 0.5f,
                          static_cast<int>(getVal("circuit")),
                          getVal("drive"),
-                         false,
-                         0.0f);
+                         vocalModeler.isActive(),
+                         vocalModeler.getSaturationDrive());
 
-    if (routing == 0)
-        runChamber();
+    if (routing == 0) runChamber();
 
-    // 5. Master Output (suavizado) + Polarity + VU Metering
     const float pol = (getVal("polarityInv") > 0.5f) ? -1.0f : 1.0f;
     outGainSmooth.setTargetValue(juce::Decibels::decibelsToGain(getVal("outputGain")));
 
@@ -278,10 +259,9 @@ void BenBocazStudioProAudioProcessor::applyFactoryPreset(int presetIndex)
     auto setP = [this](const char* id, float val)
     {
         if (auto* param = apvts.getParameter(id))
-            param->setValue(param->convertTo0to1(val));
+            param->setValueNotifyingHost(param->convertTo0to1(val));
     };
 
-    // Base limpia compartida
     setP("mode", 0.0f); setP("roomOn", 1.0f); setP("phaseSafe", 1.0f); setP("link34", 1.0f);
     setP("vocalModOn", 0.0f); setP("parCrush", 0.0f); setP("lowGain", 0.0f); setP("midGain", 0.0f); setP("highGain", 0.0f);
     setP("mic1Solo", 0.0f); setP("mic2Solo", 0.0f); setP("mic3Solo", 0.0f); setP("mic4Solo", 0.0f);
@@ -289,15 +269,14 @@ void BenBocazStudioProAudioProcessor::applyFactoryPreset(int presetIndex)
 
     switch (currentPresetIndex)
     {
-        case 0: // 01. Volcano Clean Default
+        case 0:
             setP("room", 0.0f); setP("walls", 1.0f); setP("source", 0.0f); setP("mainStereo", 0.0f);
             setP("mic1Gain", 1.00f); setP("mic2Gain", 0.25f); setP("mic3Gain", 0.00f); setP("mic4Gain", 0.00f);
             setP("mic1X", 0.50f); setP("mic1Y", 0.14f); setP("mic2X", 0.50f); setP("mic2Y", 0.42f);
             setP("mic3X", 0.14f); setP("mic3Y", 0.86f); setP("mic4X", 0.86f); setP("mic4Y", 0.86f);
             setP("chamberSend", 0.18f); setP("compThresh", -16.0f);
             break;
-
-        case 1: // 02. Volcano Epic Drums & Gates Open
+        case 1:
             setP("room", 0.0f); setP("walls", 0.0f); setP("source", 1.0f); setP("mainStereo", 1.0f);
             setP("mic1Gain", 1.00f); setP("mic2Gain", 0.42f); setP("mic3Gain", 0.55f); setP("mic4Gain", 0.55f);
             setP("mic1X", 0.50f); setP("mic1Y", 0.18f); setP("mic2X", 0.50f); setP("mic2Y", 0.48f);
@@ -305,16 +284,14 @@ void BenBocazStudioProAudioProcessor::applyFactoryPreset(int presetIndex)
             setP("parCrush", 1.0f); setP("parBlend", 0.40f); setP("parRoute", 0.0f);
             setP("chamberSend", 0.12f); setP("compThresh", -18.0f);
             break;
-
-        case 2: // 03. Volcano Ensemble Wide
+        case 2:
             setP("room", 0.0f); setP("walls", 0.0f); setP("source", 4.0f); setP("mainStereo", 1.0f);
             setP("mic1Gain", 0.90f); setP("mic2Gain", 0.48f); setP("mic3Gain", 0.68f); setP("mic4Gain", 0.68f);
             setP("mic1X", 0.50f); setP("mic1Y", 0.24f); setP("mic2X", 0.50f); setP("mic2Y", 0.55f);
             setP("mic3X", 0.08f); setP("mic3Y", 0.92f); setP("mic4X", 0.92f); setP("mic4Y", 0.92f);
             setP("chamberSend", 0.28f); setP("chamberDecay", 0.82f); setP("compThresh", -14.0f);
             break;
-
-        case 3: // 04. Shangri-La Vocal Warm & Air
+        case 3:
             setP("room", 1.0f); setP("walls", 0.0f); setP("source", 0.0f); setP("mainStereo", 0.0f);
             setP("vocalModOn", 1.0f); setP("vocalInMic", 0.0f); setP("vocalTargetMic", 0.0f);
             setP("mic1Gain", 1.00f); setP("mic2Gain", 0.30f); setP("mic3Gain", 0.18f); setP("mic4Gain", 0.18f);
@@ -322,16 +299,14 @@ void BenBocazStudioProAudioProcessor::applyFactoryPreset(int presetIndex)
             setP("mic3X", 0.18f); setP("mic3Y", 0.78f); setP("mic4X", 0.82f); setP("mic4Y", 0.78f);
             setP("compModel", 1.0f); setP("compThresh", -18.0f); setP("chamberSend", 0.24f);
             break;
-
-        case 4: // 05. Canyon Stereo Guitar Cab
+        case 4:
             setP("room", 2.0f); setP("walls", 0.0f); setP("source", 3.0f); setP("mainStereo", 1.0f);
             setP("mic1Gain", 1.00f); setP("mic2Gain", 0.22f); setP("mic3Gain", 0.38f); setP("mic4Gain", 0.38f);
             setP("mic1X", 0.50f); setP("mic1Y", 0.14f); setP("mic2X", 0.50f); setP("mic2Y", 0.36f);
             setP("mic3X", 0.16f); setP("mic3Y", 0.72f); setP("mic4X", 0.84f); setP("mic4Y", 0.72f);
             setP("drive", 0.35f); setP("chamberSend", 0.15f);
             break;
-
-        case 5: // 06. Canyon Tight Bass / Monitors
+        case 5:
         default:
             setP("room", 2.0f); setP("walls", 1.0f); setP("source", 2.0f); setP("mainStereo", 0.0f);
             setP("mic1Gain", 1.00f); setP("mic2Gain", 0.12f); setP("mic3Gain", 0.00f); setP("mic4Gain", 0.00f);

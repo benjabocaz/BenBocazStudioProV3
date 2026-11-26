@@ -618,7 +618,6 @@ void BenBocazStudioProAudioProcessorEditor::timerCallback()
                                 : processor.vuOutDb.load(std::memory_order_relaxed),
                        vuGrMode);
 
-    if (draggingAny())
         stagePad.repaint();
 }
 

@@ -4,6 +4,57 @@
  #include "BinaryData.h"
 #endif
 
+namespace
+{
+    void removeGreenScreen (juce::Image& img, bool trimBottomBand = false)
+    {
+        if (! img.isValid()) return;
+
+        juce::Image argb = img.convertedToFormat (juce::Image::ARGB);
+        const int w = argb.getWidth();
+        const int h = argb.getHeight();
+        const int effectiveBottom = trimBottomBand ? static_cast<int> (h * 0.84f) : h;
+
+        juce::Image::BitmapData data (argb, juce::Image::BitmapData::readWrite);
+
+        for (int y = 0; y < h; ++y)
+        {
+            for (int x = 0; x < w; ++x)
+            {
+                if (y >= effectiveBottom)
+                {
+                    data.setPixelColour (x, y, juce::Colour (0x00000000));
+                    continue;
+                }
+
+                const auto px = data.getPixelColour (x, y);
+                const int r = static_cast<int> (px.getRed());
+                const int g = static_cast<int> (px.getGreen());
+                const int b = static_cast<int> (px.getBlue());
+
+                const int excessGreen = g - std::max (r, b);
+
+                if (g > 85 && excessGreen > 34)
+                {
+                    data.setPixelColour (x, y, juce::Colour (0x00000000));
+                }
+                else if (g > 70 && excessGreen > 14)
+                {
+                    const float spill = std::clamp ((static_cast<float> (excessGreen) - 14.0f) / 22.0f, 0.0f, 1.0f);
+                    const int newAlpha = static_cast<int> (std::round (px.getAlpha() * (1.0f - spill)));
+                    const int clampedG = std::min (g, std::max (r, b) + 12);
+                    data.setPixelColour (x, y, juce::Colour::fromRGBA (static_cast<juce::uint8> (r),
+                                                                      static_cast<juce::uint8> (clampedG),
+                                                                      static_cast<juce::uint8> (b),
+                                                                      static_cast<juce::uint8> (std::clamp (newAlpha, 0, 255))));
+                }
+            }
+        }
+
+        img = argb;
+    }
+}
+
 //==============================================================================
 // RusticStudioLookAndFeel (Perillas Hardware Vintage en Baquelita + Bronce)
 //==============================================================================
@@ -203,12 +254,24 @@ Studio4MicStagePad::Studio4MicStagePad (BenBocazStudioProProcessor& proc)
 
 void Studio4MicStagePad::setSourceImage (int idx, const juce::Image& img)
 {
-    if (idx >= 0 && idx < 7) { sourceImgs[static_cast<size_t> (idx)] = img; repaint(); }
+    if (idx >= 0 && idx < 7)
+    {
+        juce::Image copy = img;
+        removeGreenScreen (copy, idx == 5);
+        sourceImgs[static_cast<size_t> (idx)] = copy;
+        repaint();
+    }
 }
 
 void Studio4MicStagePad::setMicImage (int idx, const juce::Image& img)
 {
-    if (idx >= 0 && idx < 4) { micImgs[static_cast<size_t> (idx)] = img; repaint(); }
+    if (idx >= 0 && idx < 4)
+    {
+        juce::Image copy = img;
+        removeGreenScreen (copy, false);
+        micImgs[static_cast<size_t> (idx)] = copy;
+        repaint();
+    }
 }
 
 void Studio4MicStagePad::setSelectedStand (int idx)
@@ -235,8 +298,8 @@ juce::Point<float> Studio4MicStagePad::getStandBasePos (int idx, juce::Rectangle
     const float mx = apvts.getRawParameterValue (pfx + "X")->load();
     const float my = apvts.getRawParameterValue (pfx + "Y")->load();
 
-    const float yTop  = area.getY() + area.getHeight() * 0.74f;
-    const float yBot  = area.getBottom() - 16.0f;
+    const float yTop  = area.getY() + area.getHeight() * 0.75f;
+    const float yBot  = area.getBottom() - 14.0f;
     const float sy    = juce::jmap (my, 0.0f, 1.0f, yTop, yBot);
     const float halfW = juce::jmap (my, 0.0f, 1.0f, area.getWidth() * 0.30f, area.getWidth() * 0.43f);
     const float sx    = area.getCentreX() + mx * halfW;
@@ -246,7 +309,7 @@ juce::Point<float> Studio4MicStagePad::getStandBasePos (int idx, juce::Rectangle
 float Studio4MicStagePad::getStandScale (int idx) const
 {
     const float my = apvts.getRawParameterValue ("mic" + juce::String (idx + 1) + "Y")->load();
-    return juce::jmap (my, 0.0f, 1.0f, 0.74f, 1.14f);
+    return juce::jmap (my, 0.0f, 1.0f, 0.76f, 1.16f);
 }
 
 float Studio4MicStagePad::getStandVisualHeight (int idx, float scale) const
@@ -347,19 +410,19 @@ void Studio4MicStagePad::drawAmpFallback (juce::Graphics& g, float cx, float flo
     };
 
     if (sourceIdx == 4)
-        drawCabinet (cx, floorY, 50.0f * scale, 42.0f * scale, juce::Colour (0xff241c16), juce::Colour (0xff8a7152), 1);
+        drawCabinet (cx, floorY, 64.0f * scale, 54.0f * scale, juce::Colour (0xff241c16), juce::Colour (0xff8a7152), 1);
     else if (sourceIdx == 5)
     {
-        drawCabinet (cx - 32.0f * scale, floorY, 46.0f * scale, 38.0f * scale, juce::Colour (0xff241c16), juce::Colour (0xff8a7152), 1);
-        drawCabinet (cx + 32.0f * scale, floorY, 46.0f * scale, 38.0f * scale, juce::Colour (0xff241c16), juce::Colour (0xff8a7152), 1);
+        drawCabinet (cx - 42.0f * scale, floorY, 58.0f * scale, 48.0f * scale, juce::Colour (0xff241c16), juce::Colour (0xff8a7152), 1);
+        drawCabinet (cx + 42.0f * scale, floorY, 58.0f * scale, 48.0f * scale, juce::Colour (0xff241c16), juce::Colour (0xff8a7152), 1);
     }
     else
     {
-        drawCabinet (cx, floorY, 56.0f * scale, 52.0f * scale, juce::Colour (0xff191716), juce::Colour (0xff3a3836), 2);
+        drawCabinet (cx, floorY, 72.0f * scale, 66.0f * scale, juce::Colour (0xff191716), juce::Colour (0xff3a3836), 2);
         g.setColour (juce::Colour (0xff2b2927).withAlpha (alpha));
-        g.fillRoundedRectangle (cx - 26.0f * scale, floorY - 66.0f * scale, 52.0f * scale, 13.0f * scale, 2.0f);
+        g.fillRoundedRectangle (cx - 32.0f * scale, floorY - 82.0f * scale, 64.0f * scale, 16.0f * scale, 2.0f);
         g.setColour (juce::Colour (0xffe5a94c).withAlpha (0.85f * alpha));
-        g.drawRect (cx - 22.0f * scale, floorY - 62.0f * scale, 44.0f * scale, 5.0f * scale, 1.0f);
+        g.drawRect (cx - 27.0f * scale, floorY - 77.0f * scale, 54.0f * scale, 6.0f * scale, 1.0f);
     }
 }
 
@@ -465,21 +528,22 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
 
     const float srcFloorX = area.getCentreX();
     const bool isCabinetSource = (sourceIdx >= 4);
-    const float srcFloorY = area.getY() + area.getHeight() * (isCabinetSource ? 0.72f : 0.63f);
-    const float roomScale = (roomIdx == 1) ? 0.78f : 0.94f;
+    const float srcFloorY = area.getY() + area.getHeight() * (isCabinetSource ? 0.77f : 0.70f);
+    const float roomScale = (roomIdx == 1) ? 0.88f : 1.04f;
 
-    g.setColour (juce::Colours::black.withAlpha (0.45f * stageAlpha));
-    g.fillEllipse (srcFloorX - 50.0f * roomScale, srcFloorY - 6.0f, 100.0f * roomScale, 14.0f);
+    g.setColour (juce::Colours::black.withAlpha (0.48f * stageAlpha));
+    g.fillEllipse (srcFloorX - 66.0f * roomScale, srcFloorY - 7.0f, 132.0f * roomScale, 16.0f);
 
     const size_t sIdx = static_cast<size_t> (std::clamp (sourceIdx, 0, 6));
     const auto& srcImg = sourceImgs[sIdx];
     if (srcImg.isValid())
     {
-        static constexpr std::array<float, 7> srcHeightRatios { 0.30f, 0.26f, 0.27f, 0.26f, 0.21f, 0.21f, 0.24f };
+        // Escalas más generosas para batería, ensamble y gabinetes/amplificadores
+        static constexpr std::array<float, 7> srcHeightRatios { 0.33f, 0.36f, 0.37f, 0.31f, 0.28f, 0.26f, 0.32f };
         const float drawH  = area.getHeight() * srcHeightRatios[sIdx] * roomScale;
         const float aspect = static_cast<float> (srcImg.getWidth()) / std::max (1.0f, static_cast<float> (srcImg.getHeight()));
         const float drawW  = drawH * aspect;
-        const float yNudge = isCabinetSource ? 12.0f : 3.0f;
+        const float yNudge = isCabinetSource ? 14.0f : 8.0f;
 
         juce::Rectangle<float> srcDest (srcFloorX - drawW * 0.5f, srcFloorY - drawH + yNudge, drawW, drawH);
         g.setOpacity (stageAlpha);
@@ -488,7 +552,7 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     }
     else if (sourceIdx >= 4)
     {
-        drawAmpFallback (g, srcFloorX, srcFloorY + 10.0f, sourceIdx, roomScale, stageAlpha);
+        drawAmpFallback (g, srcFloorX, srcFloorY + 12.0f, sourceIdx, roomScale, stageAlpha);
     }
 
     static const std::array<juce::String, 7> srcLabels {
@@ -741,8 +805,8 @@ void Studio4MicStagePad::mouseUp (const juce::MouseEvent& e)
 
 void Studio4MicStagePad::updateStandFromBasePoint (int idx, juce::Point<float> targetBase, juce::Rectangle<float> area)
 {
-    const float yTop = area.getY() + area.getHeight() * 0.74f;
-    const float yBot = area.getBottom() - 16.0f;
+    const float yTop = area.getY() + area.getHeight() * 0.75f;
+    const float yBot = area.getBottom() - 14.0f;
 
     const float normY = juce::jlimit (0.0f, 1.0f, (targetBase.y - yTop) / std::max (1.0f, yBot - yTop));
     const float halfW = juce::jmap (normY, 0.0f, 1.0f, area.getWidth() * 0.30f, area.getWidth() * 0.43f);
@@ -1004,7 +1068,7 @@ void BenBocazStudioProEditor::applyFactoryPreset (int idx)
             param->setValueNotifyingHost (param->convertTo0to1 (plainVal));
     };
 
-    if (idx == 0) // 01. Simple 2-Mic Clean (Default)
+    if (idx == 0)
     {
         setParam ("mode", 1); setParam ("source", 0); setParam ("roomOn", 1); setParam ("mainStereo", 0);
         setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.16f); setParam ("mic1Gain", 1.0f);
@@ -1013,7 +1077,7 @@ void BenBocazStudioProEditor::applyFactoryPreset (int idx)
         setParam ("chamberMix", 0.16f); setParam ("eqLow", 0.0f); setParam ("eqMid", 0.0f); setParam ("eqHigh", 0.0f);
         setParam ("parCompOn", 0);
     }
-    else if (idx == 1) // 02. Vocal C-800G Warm & Air (3 mics)
+    else if (idx == 1)
     {
         setParam ("mode", 1); setParam ("source", 0); setParam ("room", 0); setParam ("walls", 1);
         setParam ("vocalModOn", 1); setParam ("vocalSrcMic", 2); setParam ("vocalTgtMic", 0);
@@ -1022,7 +1086,7 @@ void BenBocazStudioProEditor::applyFactoryPreset (int idx)
         setParam ("eqType", 1); setParam ("eqHighFreq", 2); setParam ("eqHigh", 2.0f);
         setParam ("compType", 1); setParam ("compMix", 0.85f); setParam ("chamberMix", 0.22f);
     }
-    else if (idx == 2) // 03. Shangri-La Live Drums
+    else if (idx == 2)
     {
         setParam ("mode", 1); setParam ("source", 1); setParam ("room", 0); setParam ("walls", 1);
         setParam ("mainStereo", 1); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.24f);
@@ -1030,14 +1094,14 @@ void BenBocazStudioProEditor::applyFactoryPreset (int idx)
         setParam ("pairSpread", 1.15f); setParam ("deccaWidth", 1.20f);
         setParam ("eqType", 2); setParam ("parCompOn", 1); setParam ("parCompRoute", 1); setParam ("parCompAmt", 0.55f);
     }
-    else if (idx == 3) // 04. Canyon Guitar Stereo
+    else if (idx == 3)
     {
         setParam ("mode", 1); setParam ("source", 5); setParam ("room", 1); setParam ("walls", 1);
         setParam ("mainStereo", 1); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.20f);
         setParam ("mic1Gain", 1.0f); setParam ("mic2Gain", 0.50f); setParam ("mic3Gain", 0.45f); setParam ("mic4Gain", 0.30f);
         setParam ("eqType", 0); setParam ("eqMidFreq", 2); setParam ("eqMid", 1.8f);
     }
-    else if (idx == 4) // 05. Bass Amp Low Weight
+    else if (idx == 4)
     {
         setParam ("mode", 1); setParam ("source", 6); setParam ("room", 1); setParam ("walls", 0);
         setParam ("mainStereo", 0); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.14f);
@@ -1045,7 +1109,7 @@ void BenBocazStudioProEditor::applyFactoryPreset (int idx)
         setParam ("eqType", 0); setParam ("eqLowFreq", 1); setParam ("eqLow", 2.5f);
         setParam ("compType", 0); setParam ("compScFilter", 1);
     }
-    else // 06. Swedien NS-10 Re-Mic
+    else
     {
         setParam ("mode", 1); setParam ("source", 3); setParam ("monitorType", 1); setParam ("room", 0);
         setParam ("mainStereo", 1); setParam ("mic1Gain", 0.85f); setParam ("mic2Gain", 0.55f);

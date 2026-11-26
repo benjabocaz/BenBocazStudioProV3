@@ -534,8 +534,11 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
 
     const float srcFloorX = area.getCentreX();
     const bool isCabinetSource = (sourceIdx >= 4);
-    const float srcFloorY = area.getY() + area.getHeight() * (isCabinetSource ? 0.69f : 0.70f);
-    const float roomScale = (roomIdx == 1) ? 0.88f : 1.04f;
+    const bool isCanyon = (roomIdx == 1);
+    const float floorRatio = isCanyon ? (isCabinetSource ? 0.725f : 0.735f)
+                                      : (isCabinetSource ? 0.69f  : 0.70f);
+    const float srcFloorY = area.getY() + area.getHeight() * floorRatio;
+    const float roomScale = isCanyon ? 0.88f : 1.04f;
 
     g.setColour (juce::Colours::black.withAlpha (0.48f * stageAlpha));
     g.fillEllipse (srcFloorX - 66.0f * roomScale, srcFloorY - 7.0f, 132.0f * roomScale, 16.0f);
@@ -549,7 +552,9 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
         const float drawH  = area.getHeight() * srcHeightRatios[sIdx] * roomScale;
         const float aspect = static_cast<float> (srcImg.getWidth()) / std::max (1.0f, static_cast<float> (srcImg.getHeight()));
         const float drawW  = drawH * aspect;
-        const float yNudge = isCabinetSource ? 6.0f : 8.0f;
+        float yNudge = isCabinetSource ? 6.0f : 8.0f;
+        if (sourceIdx == 5)
+            yNudge += drawH * 0.16f; // Compensa el 16% recortado en la base de Guitar Cab (Stereo)
 
         juce::Rectangle<float> srcDest (srcFloorX - drawW * 0.5f, srcFloorY - drawH + yNudge, drawW, drawH);
         g.setOpacity (stageAlpha);
@@ -624,7 +629,7 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
         const float headY = base.y - vh * 0.84f;
 
         const float my    = apvts.getRawParameterValue ("mic" + juce::String (idx + 1) + "Y")->load();
-        const float distM = juce::jmap (my, 0.0f, 1.0f, 0.8f, roomD - 1.5f);
+        const float distM = juce::jmap (my, 0.0f, 1.0f, 0.3f, roomD - 1.5f);
         const float alpha = stageAlpha;
         const auto col    = cols[static_cast<size_t> (idx)];
         const bool active = (idx == selectedStand || idx == hoveredStand) && roomIsOn;
@@ -692,7 +697,7 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
         const juce::String selPfx = "mic" + juce::String (selectedStand + 1);
         const float selX = apvts.getRawParameterValue (selPfx + "X")->load();
         const float selY = apvts.getRawParameterValue (selPfx + "Y")->load();
-        const float selDist = juce::jmap (selY, 0.0f, 1.0f, 0.8f, roomD - 1.5f);
+        const float selDist = juce::jmap (selY, 0.0f, 1.0f, 0.3f, roomD - 1.5f);
 
         juce::String panStr = "CENTER (0.00)";
         if (selX < -0.02f) panStr = juce::String (std::abs (selX) * 100.0f, 0) + "% L";

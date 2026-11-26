@@ -1,1433 +1,775 @@
 #include "PluginEditor.h"
-
 #if HAS_CUSTOM_ASSETS
- #include "BinaryData.h"
+    #include "BinaryData.h"
 #endif
 
-namespace
+//==============================================================================
+// Look & Feel
+AndesLookAndFeel::AndesLookAndFeel()
 {
-    void removeGreenScreen (juce::Image& img, bool trimBottomBand = false)
-    {
-        if (! img.isValid()) return;
-
-        juce::Image argb = img.convertedToFormat (juce::Image::ARGB);
-        const int w = argb.getWidth();
-        const int h = argb.getHeight();
-        const int effectiveBottom = trimBottomBand ? static_cast<int> (h * 0.84f) : h;
-
-        juce::Image::BitmapData data (argb, juce::Image::BitmapData::readWrite);
-
-        for (int y = 0; y < h; ++y)
-        {
-            for (int x = 0; x < w; ++x)
-            {
-                if (y >= effectiveBottom)
-                {
-                    data.setPixelColour (x, y, juce::Colour (0x00000000));
-                    continue;
-                }
-
-                const auto px = data.getPixelColour (x, y);
-                const int r = static_cast<int> (px.getRed());
-                const int g = static_cast<int> (px.getGreen());
-                const int b = static_cast<int> (px.getBlue());
-
-                const int excessGreen = g - std::max (r, b);
-
-                if (g > 85 && excessGreen > 34)
-                {
-                    data.setPixelColour (x, y, juce::Colour (0x00000000));
-                }
-                else if (g > 70 && excessGreen > 14)
-                {
-                    const float spill = std::clamp ((static_cast<float> (excessGreen) - 14.0f) / 22.0f, 0.0f, 1.0f);
-                    const int newAlpha = static_cast<int> (std::round (px.getAlpha() * (1.0f - spill)));
-                    const int clampedG = std::min (g, std::max (r, b) + 12);
-                    data.setPixelColour (x, y, juce::Colour::fromRGBA (static_cast<juce::uint8> (r),
-                                                                      static_cast<juce::uint8> (clampedG),
-                                                                      static_cast<juce::uint8> (b),
-                                                                      static_cast<juce::uint8> (std::clamp (newAlpha, 0, 255))));
-                }
-            }
-        }
-
-        img = argb;
-    }
+    setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff1c1612));
+    setColour(juce::ComboBox::outlineColourId, juce::Colour(0xff5a4634));
+    setColour(juce::ComboBox::textColourId, juce::Colour(0xfff0e2cc));
+    setColour(juce::PopupMenu::backgroundColourId, juce::Colour(0xff1a1410));
+    setColour(juce::PopupMenu::textColourId, juce::Colour(0xfff0e2cc));
+    setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(0xff8c5a2b));
+    setColour(juce::TextButton::buttonColourId, juce::Colour(0xff261e18));
+    setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffc98a3b));
+    setColour(juce::TextButton::textColourOffId, juce::Colour(0xffe8d9c0));
+    setColour(juce::TextButton::textColourOnId, juce::Colour(0xff140f0b));
+    setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xfff0e2cc));
+    setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
 }
 
-//==============================================================================
-// RusticStudioLookAndFeel (Perillas Hardware Vintage en Baquelita + Bronce)
-//==============================================================================
-RusticStudioLookAndFeel::RusticStudioLookAndFeel()
+void AndesLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
+                                        float sliderPos, float rotaryStartAngle, float rotaryEndAngle,
+                                        juce::Slider&)
 {
-    setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff1a1511));
-    setColour (juce::ComboBox::textColourId, juce::Colour (0xfff2e6d0));
-    setColour (juce::ComboBox::outlineColourId, juce::Colour (0xff6b563c));
-    setColour (juce::PopupMenu::backgroundColourId, juce::Colour (0xff1b1612));
-    setColour (juce::PopupMenu::textColourId, juce::Colour (0xfff2e6d0));
-    setColour (juce::PopupMenu::highlightedBackgroundColourId, juce::Colour (0xffd69d46));
-    setColour (juce::PopupMenu::highlightedTextColourId, juce::Colour (0xff14100d));
-    setColour (juce::TextButton::textColourOffId, juce::Colour (0xfff2e6d0));
-    setColour (juce::TextButton::textColourOnId, juce::Colour (0xff14100d));
-}
-
-void RusticStudioLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
-                                                float sliderPos, float rotaryStartAngle, float rotaryEndAngle,
-                                                juce::Slider&)
-{
-    auto bounds = juce::Rectangle<float> (static_cast<float> (x), static_cast<float> (y),
-                                          static_cast<float> (width), static_cast<float> (height)).reduced (7.0f);
-    const float radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
-    const float cx = bounds.getCentreX();
-    const float cy = bounds.getCentreY();
+    const float radius = static_cast<float>(juce::jmin(width, height)) * 0.42f;
+    const float cx = static_cast<float>(x) + static_cast<float>(width) * 0.5f;
+    const float cy = static_cast<float>(y) + static_cast<float>(height) * 0.5f;
     const float angle = rotaryStartAngle + sliderPos * (rotaryEndAngle - rotaryStartAngle);
 
-    constexpr int numTicks = 11;
-    const float tickR = radius + 4.2f;
-    for (int i = 0; i < numTicks; ++i)
-    {
-        const float frac = static_cast<float> (i) / static_cast<float> (numTicks - 1);
-        const float a = rotaryStartAngle + frac * (rotaryEndAngle - rotaryStartAngle);
-        const float tx = cx + std::sin (a) * tickR;
-        const float ty = cy - std::cos (a) * tickR;
-        const bool lit = frac <= sliderPos + 0.01f;
-        const float dotR = (i == 0 || i == 5 || i == 10) ? 1.55f : 1.15f;
-        g.setColour (lit ? juce::Colour (0xffe5b05c) : juce::Colour (0xff594a3a));
-        g.fillEllipse (tx - dotR, ty - dotR, dotR * 2.0f, dotR * 2.0f);
-    }
+    // Anillo exterior
+    juce::Path track;
+    track.addCentredArc(cx, cy, radius + 3.0f, radius + 3.0f, 0.0f, rotaryStartAngle, rotaryEndAngle, true);
+    g.setColour(juce::Colour(0xff3a2c20));
+    g.strokePath(track, juce::PathStrokeType(2.2f));
 
-    g.setColour (juce::Colours::black.withAlpha (0.72f));
-    g.fillEllipse (cx - radius + 1.5f, cy - radius + 3.8f, radius * 2.0f, radius * 2.0f);
+    juce::Path active;
+    active.addCentredArc(cx, cy, radius + 3.0f, radius + 3.0f, 0.0f, rotaryStartAngle, angle, true);
+    g.setColour(juce::Colour(0xffd99b43));
+    g.strokePath(active, juce::PathStrokeType(2.6f));
 
-    juce::ColourGradient skirt (juce::Colour (0xff362f29), cx - radius * 0.55f, cy - radius * 0.55f,
-                                juce::Colour (0xff0f0c0a), cx + radius * 0.65f, cy + radius * 0.65f, true);
-    g.setGradientFill (skirt);
-    g.fillEllipse (cx - radius, cy - radius, radius * 2.0f, radius * 2.0f);
+    // Cuerpo metalico
+    juce::ColourGradient grad(juce::Colour(0xff4a3b2e), cx - radius * 0.4f, cy - radius * 0.4f,
+                              juce::Colour(0xff18120e), cx + radius * 0.6f, cy + radius * 0.6f, true);
+    g.setGradientFill(grad);
+    g.fillEllipse(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f);
 
-    g.setColour (juce::Colour (0xff6e5a42).withAlpha (0.65f));
-    g.drawEllipse (cx - radius + 0.5f, cy - radius + 0.5f, radius * 2.0f - 1.0f, radius * 2.0f - 1.0f, 1.0f);
+    g.setColour(juce::Colour(0xff6b543f));
+    g.drawEllipse(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f, 1.2f);
 
-    const float capR = radius * 0.68f;
-    juce::ColourGradient cap (juce::Colour (0xff9e7a47), cx - capR * 0.45f, cy - capR * 0.50f,
-                              juce::Colour (0xff2b2014), cx + capR * 0.55f, cy + capR * 0.55f, true);
-    g.setGradientFill (cap);
-    g.fillEllipse (cx - capR, cy - capR, capR * 2.0f, capR * 2.0f);
-
-    g.setColour (juce::Colour (0xffd9ab62).withAlpha (0.72f));
-    g.drawEllipse (cx - capR, cy - capR, capR * 2.0f, capR * 2.0f, 1.05f);
-
-    juce::Path pointer;
-    pointer.addRoundedRectangle (-1.5f, -radius * 0.88f, 3.0f, radius * 0.52f, 1.4f);
-    pointer.applyTransform (juce::AffineTransform::rotation (angle).translated (cx, cy));
-    g.setColour (juce::Colour (0xfffaf0dc));
-    g.fillPath (pointer);
+    // Indicador
+    juce::Path ptr;
+    ptr.addRoundedRectangle(-1.6f, -radius + 3.0f, 3.2f, radius * 0.55f, 1.2f);
+    ptr.applyTransform(juce::AffineTransform::rotation(angle).translated(cx, cy));
+    g.setColour(juce::Colour(0xfff5d79b));
+    g.fillPath(ptr);
 }
 
-void RusticStudioLookAndFeel::drawComboBox (juce::Graphics& g, int width, int height, bool,
-                                            int, int, int, int, juce::ComboBox&)
+void AndesLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
+                                        bool isHover, bool)
 {
-    auto area = juce::Rectangle<float> (0.0f, 0.0f, static_cast<float> (width), static_cast<float> (height)).reduced (0.5f);
-    g.setColour (juce::Colour (0xff18130f));
-    g.fillRoundedRectangle (area, 4.0f);
-    g.setColour (juce::Colour (0xff6b573e));
-    g.drawRoundedRectangle (area, 4.0f, 1.0f);
+    auto bounds = button.getLocalBounds().toFloat().reduced(1.0f);
+    const bool on = button.getToggleState();
 
-    juce::Path arrow;
-    const float ax = static_cast<float> (width) - 13.0f;
-    const float ay = static_cast<float> (height) * 0.5f - 2.0f;
-    arrow.addTriangle (ax, ay, ax + 7.0f, ay, ax + 3.5f, ay + 4.5f);
-    g.setColour (juce::Colour (0xffe5a94c));
-    g.fillPath (arrow);
-}
+    g.setColour(on ? juce::Colour(0xff3d2c1b) : juce::Colour(0xff1b1511));
+    g.fillRoundedRectangle(bounds, 4.0f);
+    g.setColour(on ? juce::Colour(0xffd99b43) : (isHover ? juce::Colour(0xff7a6148) : juce::Colour(0xff473729)));
+    g.drawRoundedRectangle(bounds, 4.0f, 1.0f);
 
-void RusticStudioLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& button,
-                                                    const juce::Colour&, bool isHighlighted, bool isDown)
-{
-    auto area = button.getLocalBounds().toFloat().reduced (0.5f);
-    const bool toggled = button.getToggleState();
-    g.setColour (isDown || toggled ? juce::Colour (0xffd69d46)
-                                   : (isHighlighted ? juce::Colour (0xff3c3024) : juce::Colour (0xff231c16)));
-    g.fillRoundedRectangle (area, 4.0f);
-    g.setColour (juce::Colour (0xffc99546));
-    g.drawRoundedRectangle (area, 4.0f, 1.1f);
-}
+    const float ledR = 3.6f;
+    const float ledX = bounds.getX() + 9.0f;
+    const float ledY = bounds.getCentreY();
+    g.setColour(on ? juce::Colour(0xffffb84d) : juce::Colour(0xff44382d));
+    g.fillEllipse(ledX - ledR, ledY - ledR, ledR * 2.0f, ledR * 2.0f);
 
-void RusticStudioLookAndFeel::drawToggleButton (juce::Graphics& g, juce::ToggleButton& button,
-                                                bool isHighlighted, bool)
-{
-    auto area = button.getLocalBounds().toFloat().reduced (0.5f);
-    const bool isOn = button.getToggleState();
-
-    g.setColour (isOn ? juce::Colour (0xff3b2b18) : (isHighlighted ? juce::Colour (0xff29221c) : juce::Colour (0xff171310)));
-    g.fillRoundedRectangle (area, 4.0f);
-    g.setColour (isOn ? juce::Colour (0xffe8ab4c) : juce::Colour (0xff544535));
-    g.drawRoundedRectangle (area, 4.0f, isOn ? 1.4f : 1.0f);
-
-    const float ledR = 3.8f;
-    const float ledX = area.getX() + 9.0f;
-    const float ledY = area.getCentreY();
-
-    if (isOn)
-    {
-        g.setColour (juce::Colour (0xffffb84d).withAlpha (0.35f));
-        g.fillEllipse (ledX - ledR * 1.8f, ledY - ledR * 1.8f, ledR * 3.6f, ledR * 3.6f);
-        g.setColour (juce::Colour (0xffffc866));
-    }
-    else
-    {
-        g.setColour (juce::Colour (0xff3d332a));
-    }
-    g.fillEllipse (ledX - ledR, ledY - ledR, ledR * 2.0f, ledR * 2.0f);
-
-    g.setColour (isOn ? juce::Colour (0xfffaf0dc) : juce::Colour (0xff9c8e7d));
-    g.setFont (juce::Font (juce::FontOptions (9.1f).withStyle ("Bold")));
-    g.drawText (button.getButtonText(), area.withTrimmedLeft (16.0f).reduced (2.0f, 0.0f), juce::Justification::centredLeft);
+    g.setColour(on ? juce::Colour(0xffffecd0) : juce::Colour(0xffbba992));
+    g.setFont(juce::FontOptions(10.5f, juce::Font::bold));
+    g.drawFittedText(button.getButtonText(),
+                     bounds.withTrimmedLeft(18.0f).withTrimmedRight(4.0f).toNearestInt(),
+                     juce::Justification::centredLeft, 1);
 }
 
 //==============================================================================
-// AnalogVuMeter
-//==============================================================================
-AnalogVuMeter::AnalogVuMeter (BenBocazStudioProProcessor& proc) : processor (proc) { startTimerHz (30); }
-
-void AnalogVuMeter::timerCallback()
+// AnalogVUMeter
+void AnalogVUMeter::setLevelDb(float db, bool isGainReduction)
 {
-    float target = 0.0f;
-    if (showGR)
-        target = 1.0f - (std::clamp (processor.getCompGrDb(), 0.0f, 20.0f) / 20.0f);
+    grMode = isGainReduction;
+    float norm = 0.0f;
+    if (grMode)
+        norm = std::clamp(1.0f - (db / 18.0f), 0.0f, 1.0f);
     else
-        target = juce::jmap (std::clamp (processor.getOutputVuDb(), -36.0f, 3.0f), -36.0f, 3.0f, 0.0f, 1.0f);
+        norm = std::clamp((db + 36.0f) / 39.0f, 0.0f, 1.0f);
 
-    smoothedNeedle = smoothedNeedle * 0.72f + target * 0.28f;
+    smoothedNeedle = smoothedNeedle * 0.72f + norm * 0.28f;
     repaint();
 }
 
-void AnalogVuMeter::paint (juce::Graphics& g)
+void AnalogVUMeter::paint(juce::Graphics& g)
 {
-    auto r = getLocalBounds().toFloat().reduced (1.0f);
-    g.setColour (juce::Colour (0xff120e0b));
-    g.fillRoundedRectangle (r, 5.0f);
-    g.setColour (juce::Colour (0xff786043));
-    g.drawRoundedRectangle (r, 5.0f, 1.5f);
+    auto b = getLocalBounds().toFloat().reduced(1.0f);
+    juce::ColourGradient bg(juce::Colour(0xffe5b869), b.getCentreX(), b.getY(),
+                            juce::Colour(0xffb57c35), b.getCentreX(), b.getBottom(), false);
+    g.setGradientFill(bg);
+    g.fillRoundedRectangle(b, 4.0f);
 
-    auto glass = r.reduced (3.5f);
-    juce::ColourGradient lamp (juce::Colour (0xfff8db96), glass.getCentreX(), glass.getBottom(),
-                               juce::Colour (0xffb88130), glass.getCentreX(), glass.getY(), true);
-    g.setGradientFill (lamp);
-    g.fillRoundedRectangle (glass, 3.0f);
+    g.setColour(juce::Colour(0xff2b1e14));
+    g.drawRoundedRectangle(b, 4.0f, 1.5f);
 
-    const float pivotX = glass.getCentreX();
-    const float pivotY = glass.getBottom() + 14.0f;
-    const float rad = glass.getHeight() + 5.0f;
+    g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
+    g.drawText("-20   -10   -5   0   +3", b.withTrimmedTop(3.0f).withHeight(14.0f), juce::Justification::centred);
+    g.drawText(grMode ? "VU GR" : "VU OUT", b.withTrimmedLeft(6.0f).withTrimmedBottom(2.0f), juce::Justification::bottomLeft);
 
-    juce::Path scaleArc;
-    scaleArc.addCentredArc (pivotX, pivotY, rad * 0.86f, rad * 0.86f, 0.0f, -0.75f, 0.75f, true);
-    g.setColour (juce::Colour (0xff2b1e0d));
-    g.strokePath (scaleArc, juce::PathStrokeType (1.4f));
+    const float angle = juce::jmap(smoothedNeedle, -0.68f, 0.68f);
+    const float px = b.getCentreX();
+    const float py = b.getBottom() + 10.0f;
+    const float len = b.getHeight() * 0.92f;
 
-    juce::Path redArc;
-    redArc.addCentredArc (pivotX, pivotY, rad * 0.86f, rad * 0.86f, 0.0f, 0.35f, 0.75f, true);
-    g.setColour (juce::Colour (0xffb52318));
-    g.strokePath (redArc, juce::PathStrokeType (2.4f));
-
-    g.setColour (juce::Colour (0xff2b1e0d));
-    g.setFont (juce::Font (juce::FontOptions (9.2f).withStyle ("Bold")));
-    g.drawText (showGR ? "GR  dB" : "VU  OUT", glass.reduced (6.0f, 2.0f), juce::Justification::bottomLeft);
-    g.drawText ("-20    -10    -5    0   +3", glass.reduced (8.0f, 3.0f), juce::Justification::centredTop);
-
-    const float needleAngle = juce::jmap (smoothedNeedle, 0.0f, 1.0f, -0.75f, 0.75f);
-    juce::Path needle;
-    needle.startNewSubPath (pivotX, pivotY);
-    needle.lineTo (pivotX + std::sin (needleAngle) * (rad * 0.92f),
-                   pivotY - std::cos (needleAngle) * (rad * 0.92f));
-    g.setColour (juce::Colour (0xff1a1209));
-    g.strokePath (needle, juce::PathStrokeType (1.8f));
+    g.setColour(juce::Colour(0xff1a120c));
+    g.drawLine(px, py, px + std::sin(angle) * len, py - std::cos(angle) * len, 1.8f);
 }
 
 //==============================================================================
 // Studio4MicStagePad
-//==============================================================================
-Studio4MicStagePad::Studio4MicStagePad (BenBocazStudioProProcessor& proc)
-    : processor (proc), apvts (proc.apvts)
+Studio4MicStagePad::Studio4MicStagePad(juce::AudioProcessorValueTreeState& state)
+    : apvts(state)
 {
-    startTimerHz (24);
+    loadEmbeddedImages();
 }
 
-void Studio4MicStagePad::setSourceImage (int idx, const juce::Image& img)
+juce::Image Studio4MicStagePad::removeGreenScreen(const juce::Image& src)
 {
-    if (idx >= 0 && idx < 7)
+    if (!src.isValid()) return {};
+    juce::Image out = src.convertedToFormat(juce::Image::ARGB);
+    juce::Image::BitmapData bd(out, juce::Image::BitmapData::readWrite);
+
+    for (int y = 0; y < out.getHeight(); ++y)
     {
-        juce::Image copy = img;
-        removeGreenScreen (copy, idx == 5);
-        sourceImgs[static_cast<size_t> (idx)] = copy;
-        repaint();
-    }
-}
-
-void Studio4MicStagePad::setMicImage (int idx, const juce::Image& img)
-{
-    if (idx >= 0 && idx < 4)
-    {
-        juce::Image copy = img;
-        removeGreenScreen (copy, false);
-        micImgs[static_cast<size_t> (idx)] = copy;
-        repaint();
-    }
-}
-
-void Studio4MicStagePad::setSelectedStand (int idx)
-{
-    const int clamped = std::clamp (idx, 0, 3);
-    if (selectedStand != clamped)
-    {
-        selectedStand = clamped;
-        if (onSelectedStandChanged) onSelectedStandChanged (selectedStand);
-        repaint();
-    }
-}
-
-void Studio4MicStagePad::centerStand (int idx)
-{
-    const juce::String pfx = "mic" + juce::String (std::clamp (idx, 0, 3) + 1);
-    if (auto* pX = apvts.getParameter (pfx + "X"))
-        pX->setValueNotifyingHost (0.5f);
-}
-
-juce::Point<float> Studio4MicStagePad::getStandBasePos (int idx, juce::Rectangle<float> area) const
-{
-    const juce::String pfx = "mic" + juce::String (idx + 1);
-    const float mx = apvts.getRawParameterValue (pfx + "X")->load();
-    const float my = apvts.getRawParameterValue (pfx + "Y")->load();
-
-    const float yTop  = area.getY() + area.getHeight() * 0.75f;
-    const float yBot  = area.getBottom() - 14.0f;
-    const float sy    = juce::jmap (my, 0.0f, 1.0f, yTop, yBot);
-    const float halfW = juce::jmap (my, 0.0f, 1.0f, area.getWidth() * 0.30f, area.getWidth() * 0.43f);
-    const float sx    = area.getCentreX() + mx * halfW;
-    return { sx, sy };
-}
-
-float Studio4MicStagePad::getStandScale (int idx) const
-{
-    const float my = apvts.getRawParameterValue ("mic" + juce::String (idx + 1) + "Y")->load();
-    return juce::jmap (my, 0.0f, 1.0f, 0.78f, 1.20f);
-}
-
-float Studio4MicStagePad::getStandVisualHeight (int idx, float scale) const
-{
-    // Alturas diferenciadas según el rol de cada atril:
-    // 0: MAIN (enfocado), 1: MID (medio), 2: AIR (alto/esbelto), 3: DECCA (árbol imponente)
-    static constexpr std::array<float, 4> baseHeights { 116.0f, 132.0f, 162.0f, 148.0f };
-    const float baseH = baseHeights[static_cast<size_t> (std::clamp (idx, 0, 3))];
-
-    // Escala proporcional al tamaño del escenario (se ve bien tanto en vista normal como en Expand Stage)
-    const float padFactor = std::clamp (static_cast<float> (getHeight()) / 360.0f, 0.88f, 1.48f);
-    return baseH * scale * padFactor;
-}
-
-juce::Rectangle<float> Studio4MicStagePad::getStandTagRect (int idx, juce::Rectangle<float> area) const
-{
-    const auto base = getStandBasePos (idx, area);
-    const float sc  = getStandScale (idx);
-    const float vh  = getStandVisualHeight (idx, sc);
-    const float tagW = (idx == 0) ? 102.0f : 80.0f;
-    const float tagY = std::max (area.getY() + 26.0f, base.y - vh - 14.0f);
-    return { base.x - tagW * 0.5f, tagY, tagW, 15.0f };
-}
-
-int Studio4MicStagePad::findTargetStand (juce::Point<float> pt, juce::Rectangle<float> area, float& outMinDist, bool preferSelected) const
-{
-    for (int i = 3; i >= 0; --i)
-    {
-        const float g = apvts.getRawParameterValue ("mic" + juce::String (i + 1) + "Gain")->load();
-        if (g <= 0.005f) continue;
-
-        if (getStandTagRect (i, area).expanded (3.0f).contains (pt))
+        for (int x = 0; x < out.getWidth(); ++x)
         {
-            outMinDist = 0.0f;
-            return i;
-        }
-    }
+            auto c = bd.getPixelColour(x, y);
+            const int r = c.getRed(), g = c.getGreen(), b = c.getBlue();
+            const int maxRB = std::max(r, b);
+            const int greenExcess = g - maxRB;
 
-    auto distToStand = [&] (int i)
-    {
-        const auto base = getStandBasePos (i, area);
-        const float sc  = getStandScale (i);
-        const float vh  = getStandVisualHeight (i, sc);
-        const juce::Point<float> topPt (base.x, base.y - vh * 0.82f);
-        const juce::Point<float> midPt (base.x, base.y - vh * 0.42f);
-        return std::min ({ pt.getDistanceFrom (base), pt.getDistanceFrom (topPt), pt.getDistanceFrom (midPt) });
-    };
-
-    if (preferSelected)
-    {
-        const float selGain = apvts.getRawParameterValue ("mic" + juce::String (selectedStand + 1) + "Gain")->load();
-        if (selGain > 0.005f)
-        {
-            const float selDist = distToStand (selectedStand);
-            if (selDist < 36.0f)
+            if (greenExcess > 48 && g > 95)
             {
-                outMinDist = selDist;
-                return selectedStand;
+                bd.setPixelColour(x, y, juce::Colours::transparentBlack);
+            }
+            else if (greenExcess > 18 && g > 70)
+            {
+                const float alpha = 1.0f - std::clamp(static_cast<float>(greenExcess - 18) / 30.0f, 0.0f, 1.0f);
+                const uint8_t cleanG = static_cast<uint8_t>(std::min(g, maxRB + 12));
+                bd.setPixelColour(x, y, juce::Colour::fromRGBA(static_cast<uint8_t>(r), cleanG, static_cast<uint8_t>(b),
+                                                               static_cast<uint8_t>(alpha * 255.0f)));
             }
         }
     }
-
-    outMinDist = 1e9f;
-    int best = selectedStand;
-    for (int i = 0; i < 4; ++i)
-    {
-        const float g = apvts.getRawParameterValue ("mic" + juce::String (i + 1) + "Gain")->load();
-        if (g <= 0.005f) continue;
-
-        const float d = distToStand (i);
-        if (d < outMinDist)
-        {
-            outMinDist = d;
-            best = i;
-        }
-    }
-    return best;
+    return out;
 }
 
-void Studio4MicStagePad::drawAmpFallback (juce::Graphics& g, float cx, float floorY, int sourceIdx, float scale, float alpha) const
-{
-    auto drawCabinet = [&] (float x, float y, float w, float h, juce::Colour tolex, juce::Colour grille, int speakers)
-    {
-        g.setColour (tolex.withAlpha (alpha));
-        g.fillRoundedRectangle (x - w * 0.5f, y - h, w, h, 3.0f * scale);
-        g.setColour (juce::Colour (0xffd6b372).withAlpha (0.85f * alpha));
-        g.drawRoundedRectangle (x - w * 0.5f, y - h, w, h, 3.0f * scale, 1.2f);
-
-        g.setColour (grille.withAlpha (0.92f * alpha));
-        g.fillRect (x - w * 0.43f, y - h * 0.88f, w * 0.86f, h * 0.78f);
-
-        g.setColour (juce::Colour (0xff14110f).withAlpha (0.55f * alpha));
-        if (speakers == 1)
-        {
-            const float r = std::min (w, h) * 0.28f;
-            g.fillEllipse (x - r, y - h * 0.48f - r, r * 2.0f, r * 2.0f);
-        }
-        else
-        {
-            const float r = std::min (w * 0.22f, h * 0.22f);
-            g.fillEllipse (x - w * 0.22f - r, y - h * 0.48f - r, r * 2.0f, r * 2.0f);
-            g.fillEllipse (x + w * 0.22f - r, y - h * 0.48f - r, r * 2.0f, r * 2.0f);
-        }
-    };
-
-    if (sourceIdx == 4)
-        drawCabinet (cx, floorY, 64.0f * scale, 54.0f * scale, juce::Colour (0xff241c16), juce::Colour (0xff8a7152), 1);
-    else if (sourceIdx == 5)
-    {
-        drawCabinet (cx - 42.0f * scale, floorY, 58.0f * scale, 48.0f * scale, juce::Colour (0xff241c16), juce::Colour (0xff8a7152), 1);
-        drawCabinet (cx + 42.0f * scale, floorY, 58.0f * scale, 48.0f * scale, juce::Colour (0xff241c16), juce::Colour (0xff8a7152), 1);
-    }
-    else
-    {
-        drawCabinet (cx, floorY, 72.0f * scale, 66.0f * scale, juce::Colour (0xff191716), juce::Colour (0xff3a3836), 2);
-        g.setColour (juce::Colour (0xff2b2927).withAlpha (alpha));
-        g.fillRoundedRectangle (cx - 32.0f * scale, floorY - 82.0f * scale, 64.0f * scale, 16.0f * scale, 2.0f);
-        g.setColour (juce::Colour (0xffe5a94c).withAlpha (0.85f * alpha));
-        g.drawRect (cx - 27.0f * scale, floorY - 77.0f * scale, 54.0f * scale, 6.0f * scale, 1.0f);
-    }
-}
-
-void Studio4MicStagePad::drawTipsOverlay (juce::Graphics& g, juce::Rectangle<float> area, int sourceIdx) const
-{
-    const float w = std::min (265.0f, area.getWidth() * 0.44f);
-    const float h = 136.0f;
-    juce::Rectangle<float> card (area.getRight() - w - 10.0f, area.getY() + 30.0f, w, h);
-
-    g.setColour (juce::Colour (0xff1a130d).withAlpha (0.93f));
-    g.fillRoundedRectangle (card, 6.0f);
-    g.setColour (juce::Colour (0xffe5a94c));
-    g.drawRoundedRectangle (card, 6.0f, 1.3f);
-
-    static const std::array<juce::String, 7> titles {
-        "TIPS: VOCALS (3 TECHNIQUES)",
-        "TIPS: DRUMS (3 TECHNIQUES)",
-        "TIPS: ENSEMBLE (3 TECHNIQUES)",
-        "TIPS: MONITORS (3 TECHNIQUES)",
-        "TIPS: GUITAR MONO (3 TECHNIQUES)",
-        "TIPS: GUITAR STEREO (3 TECHNIQUES)",
-        "TIPS: BASS AMP (3 TECHNIQUES)"
-    };
-
-    static const std::array<juce::String, 7> bodies {
-        "1. Single Mic Anchor: 1:MAIN Mono centered close, MID/AIR/DECCA at 0.\n"
-        "2. Air & Intimacy: 1:MAIN close + 3:AIR soft at rear for natural halo.\n"
-        "3. Open Room Depth: Move 1:MAIN back with PHASE SAFE + short Chamber.",
-
-        "1. Coincident Overhead: 1:MAIN X-Y centered for punchy kit focus.\n"
-        "2. Studio Room Punch: 2:MID close/mid + 3:AIR wide for cymbals.\n"
-        "3. Bonham Huge Room: Add 4:DECCA far back + Parallel Crush on Room Mics.",
-
-        "1. Single Acoustic Photo: 1:MAIN X-Y centered at medium distance.\n"
-        "2. Wood Width: 1:MAIN anchor + 2:MID / 3:AIR spaced pair.\n"
-        "3. Orchestral Depth: 1:MAIN + 4:DECCA wide at rear for 3D tail.",
-
-        "1. Reference Focus: 1:MAIN centered to capture direct speaker punch.\n"
-        "2. Controlled Room: 1:MAIN X-Y + 2:MID low for natural wall bounce.\n"
-        "3. Swedien Wide Stage: Push 2:MID + 3:AIR / 4:DECCA for lush spread.",
-
-        "1. Cone Edge Bite: 1:MAIN Mono close & centered for tight riffs.\n"
-        "2. Amp + Room Air: 1:MAIN close + 3:AIR far back for organic body.\n"
-        "3. Symmetrical Depth: Enable LINK 3+4 with AIR & DECCA mirrored.",
-
-        "1. Stereo Cab Capture: 1:MAIN X-Y centered to preserve chorus/delay.\n"
-        "2. Wide A/B Stage: 2:MID + 3:AIR with PAIR WIDE open on both cabs.\n"
-        "3. Huge Live Wall: Add 4:DECCA at rear + Chamber 3 for 3D width.",
-
-        "1. Sub Core Anchor: 1:MAIN Mono close/center, ambient mics low.\n"
-        "2. Growl + Wood Body: 1:MAIN + 2:MID with EQ HPF around 40-50Hz.\n"
-        "3. Warm Room Weight: Subtle 4:DECCA far back with PHASE SAFE locked."
-    };
-
-    const size_t idx = static_cast<size_t> (std::clamp (sourceIdx, 0, 6));
-    auto inner = card.reduced (9.0f, 7.0f);
-
-    g.setColour (juce::Colour (0xfff4c370));
-    g.setFont (juce::Font (juce::FontOptions (9.4f).withStyle ("Bold")));
-    g.drawText (titles[idx], inner.removeFromTop (15.0f), juce::Justification::centredLeft);
-
-    g.setColour (juce::Colour (0xffe8dcc6));
-    g.setFont (juce::Font (juce::FontOptions (8.7f)));
-    g.drawFittedText (bodies[idx], inner.toNearestInt(), juce::Justification::topLeft, 9);
-}
-
-void Studio4MicStagePad::paint (juce::Graphics& g)
-{
-    auto area = getLocalBounds().toFloat().reduced (2.0f);
-    const bool roomIsOn   = apvts.getRawParameterValue ("roomOn")->load() >= 0.5f;
-    const int roomIdx     = static_cast<int> (apvts.getRawParameterValue ("room")->load());
-    const int wallsLive   = static_cast<int> (apvts.getRawParameterValue ("walls")->load());
-    const int sourceIdx   = static_cast<int> (apvts.getRawParameterValue ("source")->load());
-    const int monitorIdx  = static_cast<int> (apvts.getRawParameterValue ("monitorType")->load());
-    const bool phaseOk    = apvts.getRawParameterValue ("phaseAlign")->load() >= 0.5f;
-    const bool mainStereo = apvts.getRawParameterValue ("mainStereo")->load() >= 0.5f;
-    const float pairW     = apvts.getRawParameterValue ("pairSpread")->load();
-    const float deccaW    = apvts.getRawParameterValue ("deccaWidth")->load();
-
-    juce::Path clip;
-    clip.addRoundedRectangle (area, 6.0f);
-    g.saveState();
-    g.reduceClipRegion (clip);
-
-    const juce::Image& activeRoom = (roomIdx == 1 && canyonImg.isValid()) ? canyonImg
-                                                                          : (shangriLaImg.isValid() ? shangriLaImg : canyonImg);
-    if (activeRoom.isValid())
-    {
-        g.drawImage (activeRoom, area, juce::RectanglePlacement::fillDestination);
-        const float dimAlpha = ! roomIsOn ? 0.72f : (wallsLive ? 0.08f : 0.30f);
-        g.setColour (juce::Colour (0xff140e09).withAlpha (dimAlpha));
-        g.fillRect (area);
-    }
-    else
-    {
-        juce::ColourGradient wood (roomIdx == 0 ? juce::Colour (0xff4a311e) : juce::Colour (0xff2e1c11), area.getTopLeft(),
-                                   juce::Colour (0xff170f0a), area.getBottomRight(), false);
-        g.setGradientFill (wood);
-        g.fillRect (area);
-    }
-
-    const float stageAlpha = roomIsOn ? 1.0f : 0.35f;
-
-    const float srcFloorX = area.getCentreX();
-    const bool isCabinetSource = (sourceIdx >= 4);
-    const bool isCanyon = (roomIdx == 1);
-    const float floorRatio = isCanyon ? (isCabinetSource ? 0.725f : 0.735f)
-                                      : (isCabinetSource ? 0.69f  : 0.70f);
-    const float srcFloorY = area.getY() + area.getHeight() * floorRatio;
-    const float roomScale = isCanyon ? 0.88f : 1.04f;
-
-    g.setColour (juce::Colours::black.withAlpha (0.48f * stageAlpha));
-    g.fillEllipse (srcFloorX - 66.0f * roomScale, srcFloorY - 7.0f, 132.0f * roomScale, 16.0f);
-
-    const size_t sIdx = static_cast<size_t> (std::clamp (sourceIdx, 0, 6));
-    const auto& srcImg = sourceImgs[sIdx];
-    if (srcImg.isValid())
-    {
-        // Proporciones coherentes con los amplis ubicados más al fondo de la sala
-        static constexpr std::array<float, 7> srcHeightRatios { 0.33f, 0.36f, 0.37f, 0.31f, 0.25f, 0.23f, 0.29f };
-        const float drawH  = area.getHeight() * srcHeightRatios[sIdx] * roomScale;
-        const float aspect = static_cast<float> (srcImg.getWidth()) / std::max (1.0f, static_cast<float> (srcImg.getHeight()));
-        const float drawW  = drawH * aspect;
-        float yNudge = isCabinetSource ? 6.0f : 8.0f;
-        if (sourceIdx == 5)
-            yNudge += drawH * 0.16f; // Compensa el 16% recortado en la base de Guitar Cab (Stereo)
-
-        juce::Rectangle<float> srcDest (srcFloorX - drawW * 0.5f, srcFloorY - drawH + yNudge, drawW, drawH);
-        g.setOpacity (stageAlpha);
-        g.drawImage (srcImg, srcDest, juce::RectanglePlacement::stretchToFit);
-        g.setOpacity (1.0f);
-    }
-    else if (sourceIdx >= 4)
-    {
-        drawAmpFallback (g, srcFloorX, srcFloorY + 12.0f, sourceIdx, roomScale, stageAlpha);
-    }
-
-    static const std::array<juce::String, 7> srcLabels {
-        "SOURCE: VOCALS", "SOURCE: DRUMS", "SOURCE: ENSEMBLE", "MONITORS",
-        "GUITAR CAB (MONO)", "GUITAR CAB (STEREO)", "BASS AMP (LOW END)"
-    };
-    juce::String srcLbl = srcLabels[sIdx];
-    if (sourceIdx == 3)
-        srcLbl = (monitorIdx == 0 ? "MONITORS: ALTEC" : (monitorIdx == 1 ? "MONITORS: NS-10" : "MONITORS: JBL PA"));
-
-    g.setColour (juce::Colour (0xff120d09).withAlpha (0.86f * stageAlpha));
-    g.fillRoundedRectangle (srcFloorX - 70.0f, area.getY() + 28.0f, 140.0f, 15.5f, 3.5f);
-    g.setColour (juce::Colour (0xfff2e6d0).withAlpha (0.92f * stageAlpha));
-    g.drawRoundedRectangle (srcFloorX - 70.0f, area.getY() + 28.0f, 140.0f, 15.5f, 3.5f, 0.9f);
-    g.setFont (juce::Font (juce::FontOptions (8.5f).withStyle ("Bold")));
-    g.drawText (srcLbl, static_cast<int> (srcFloorX - 70), static_cast<int> (area.getY() + 28), 140, 16, juce::Justification::centred);
-
-    if (linkAirDecca && roomIsOn)
-    {
-        const float g3 = apvts.getRawParameterValue ("mic3Gain")->load();
-        const float g4 = apvts.getRawParameterValue ("mic4Gain")->load();
-        if (g3 > 0.005f && g4 > 0.005f)
-        {
-            const auto p3 = getStandBasePos (2, area);
-            const auto p4 = getStandBasePos (3, area);
-            g.setColour (juce::Colour (0xff8fc7e8).withAlpha (0.45f));
-            float dash[2] = { 4.0f, 4.0f };
-            g.drawDashedLine (juce::Line<float> (p3, p4), dash, 2, 1.3f);
-        }
-    }
-
-    std::array<int, 4> order { 0, 1, 2, 3 };
-    std::sort (order.begin(), order.end(), [this] (int a, int b)
-    {
-        const float ya = apvts.getRawParameterValue ("mic" + juce::String (a + 1) + "Y")->load();
-        const float yb = apvts.getRawParameterValue ("mic" + juce::String (b + 1) + "Y")->load();
-        return ya < yb;
-    });
-
-    static const std::array<juce::String, 4> baseNames { "MAIN", "MID", "AIR", "DECCA" };
-    static const std::array<juce::Colour, 4> cols {
-        juce::Colour (0xfff2b24c),
-        juce::Colour (0xffe07a52),
-        juce::Colour (0xff8fc7e8),
-        juce::Colour (0xfff5ebd6)
-    };
-
-    const float roomD = (roomIdx == 0) ? 12.0f : 8.5f;
-    const int soloIdx = processor.getSoloStand();
-
-    for (int idx : order)
-    {
-        const float gain = apvts.getRawParameterValue ("mic" + juce::String (idx + 1) + "Gain")->load();
-        const bool mutedBySolo = (soloIdx >= 0 && soloIdx != idx);
-
-        if (gain <= 0.005f || mutedBySolo)
-            continue;
-
-        const auto base   = getStandBasePos (idx, area);
-        const float sc    = getStandScale (idx);
-        const float vh    = getStandVisualHeight (idx, sc);
-        const float headX = base.x;
-        const float headY = base.y - vh * 0.84f;
-
-        const float my    = apvts.getRawParameterValue ("mic" + juce::String (idx + 1) + "Y")->load();
-        const float distM = juce::jmap (my, 0.0f, 1.0f, 0.3f, roomD - 1.5f);
-        const float alpha = stageAlpha;
-        const auto col    = cols[static_cast<size_t> (idx)];
-        const bool active = (idx == selectedStand || idx == hoveredStand) && roomIsOn;
-
-        const float haloRx = (active ? 24.0f : 18.0f) * sc;
-        const float haloRy = (active ? 8.0f  : 5.8f)  * sc;
-
-        g.setColour (juce::Colours::black.withAlpha (0.55f * alpha));
-        g.fillEllipse (base.x - 15.0f * sc, base.y - 4.0f * sc, 30.0f * sc, 9.0f * sc);
-
-        g.setColour (col.withAlpha ((active ? 0.30f : 0.14f) * alpha));
-        g.fillEllipse (base.x - haloRx, base.y - haloRy, haloRx * 2.0f, haloRy * 2.0f);
-        g.setColour (col.withAlpha ((active ? 0.95f : 0.58f) * alpha));
-        g.drawEllipse (base.x - haloRx, base.y - haloRy, haloRx * 2.0f, haloRy * 2.0f, active ? 1.8f : 1.1f);
-
-        int micSpriteIdx = 0;
-        float widthStretch = 1.0f;
-        if (idx == 0)
-            micSpriteIdx = mainStereo ? 1 : 0;
-        else if (idx == 1 || idx == 2)
-        {
-            micSpriteIdx = (pairW < 0.08f) ? 0 : 2;
-            widthStretch = (pairW < 0.08f) ? 0.92f : juce::jmap (pairW, 0.08f, 1.5f, 0.68f, 1.32f);
-        }
-        else
-        {
-            micSpriteIdx = 3;
-            widthStretch = juce::jmap (deccaW, 0.2f, 1.5f, 0.70f, 1.35f);
-        }
-
-        const auto& mImg = micImgs[static_cast<size_t> (micSpriteIdx)];
-
-        const float ringR = (idx == 3 ? 21.0f : 16.0f) * sc;
-        g.setColour (col.withAlpha ((active ? 0.26f : 0.14f) * alpha));
-        g.fillEllipse (headX - ringR, headY - ringR, ringR * 2.0f, ringR * 2.0f);
-        g.setColour (col.withAlpha ((active ? 0.92f : 0.65f) * alpha));
-        g.drawEllipse (headX - ringR, headY - ringR, ringR * 2.0f, ringR * 2.0f, active ? 1.7f : 1.1f);
-
-        if (mImg.isValid())
-        {
-            const float aspect = static_cast<float> (mImg.getWidth()) / std::max (1.0f, static_cast<float> (mImg.getHeight()));
-            const float drawW  = vh * aspect * widthStretch;
-            juce::Rectangle<float> dest (base.x - drawW * 0.5f, base.y - vh + 4.0f * sc, drawW, vh);
-
-            g.setOpacity (alpha);
-            g.drawImage (mImg, dest, juce::RectanglePlacement::stretchToFit);
-            g.setOpacity (1.0f);
-        }
-
-        juce::String tag = juce::String (idx + 1) + ":" + baseNames[static_cast<size_t> (idx)];
-        if (idx == 0) tag += (mainStereo ? " X-Y" : " MONO");
-        tag += " " + juce::String (distM, 1) + "m";
-
-        const auto tagRect = getStandTagRect (idx, area);
-        g.setColour (juce::Colour (0xff120d0a).withAlpha (0.92f * stageAlpha));
-        g.fillRoundedRectangle (tagRect, 3.0f);
-        g.setColour (col.withAlpha (active ? 1.0f : 0.90f * alpha));
-        g.drawRoundedRectangle (tagRect, 3.0f, active ? 1.4f : 0.85f);
-        g.setFont (juce::Font (juce::FontOptions (8.5f).withStyle ("Bold")));
-        g.drawText (tag, tagRect.toNearestInt(), juce::Justification::centred);
-    }
-
-    if (roomIsOn)
-    {
-        const juce::String selPfx = "mic" + juce::String (selectedStand + 1);
-        const float selX = apvts.getRawParameterValue (selPfx + "X")->load();
-        const float selY = apvts.getRawParameterValue (selPfx + "Y")->load();
-        const float selDist = juce::jmap (selY, 0.0f, 1.0f, 0.3f, roomD - 1.5f);
-
-        juce::String panStr = "CENTER (0.00)";
-        if (selX < -0.02f) panStr = juce::String (std::abs (selX) * 100.0f, 0) + "% L";
-        else if (selX > 0.02f) panStr = juce::String (selX * 100.0f, 0) + "% R";
-
-        juce::Rectangle<float> hud (area.getRight() - 190.0f, area.getBottom() - 42.0f, 182.0f, 35.0f);
-        g.setColour (juce::Colour (0xff120d09).withAlpha (0.88f));
-        g.fillRoundedRectangle (hud, 4.0f);
-        g.setColour (cols[static_cast<size_t> (selectedStand)].withAlpha (0.85f));
-        g.drawRoundedRectangle (hud, 4.0f, 1.0f);
-
-        g.setFont (juce::Font (juce::FontOptions (8.6f).withStyle ("Bold")));
-        g.drawText ("SELECTED: " + juce::String (selectedStand + 1) + ":" + baseNames[static_cast<size_t> (selectedStand)],
-                    hud.reduced (7.0f, 3.0f).removeFromTop (14.0f), juce::Justification::centredLeft);
-        g.setColour (juce::Colour (0xffe8dcc6));
-        g.drawText ("DIST: " + juce::String (selDist, 1) + "m  |  PAN: " + panStr,
-                    hud.reduced (7.0f, 3.0f).removeFromBottom (14.0f), juce::Justification::centredLeft);
-    }
-
-    if (showTipsOverlay)
-        drawTipsOverlay (g, area, sourceIdx);
-
-    g.restoreState();
-
-    g.setColour ((roomIsOn && wallsLive) ? juce::Colour (0xffd9a04a) : juce::Colour (0xff5c4f41));
-    g.drawRoundedRectangle (area, 6.0f, (roomIsOn && wallsLive) ? 2.0f : 1.4f);
-
-    auto topBar = area.reduced (8.0f).removeFromTop (16.0f);
-    g.setColour (juce::Colour (0xff140f0b).withAlpha (0.85f));
-    g.fillRoundedRectangle (topBar.expanded (4.0f, 2.0f), 3.0f);
-
-    g.setColour (juce::Colour (0xfff4d08c).withAlpha (roomIsOn ? 1.0f : 0.55f));
-    g.setFont (juce::Font (juce::FontOptions (9.8f).withStyle ("Bold")));
-    juce::String roomTitle = (roomIdx == 0 ? "STUDIO A (SHANGRI-LA)" : "STUDIO B (CANYON)");
-    roomTitle += (wallsLive ? "  |  LIVE WOOD" : "  |  TIGHT");
-    g.drawText (roomTitle, topBar, juce::Justification::centredLeft);
-
-    if (! roomIsOn)
-    {
-        g.setColour (juce::Colour (0xffc99e6b));
-        g.drawText ("ROOM BYPASSED", topBar, juce::Justification::centredRight);
-    }
-    else
-    {
-        g.setColour (phaseOk ? juce::Colour (0xff8ce08e) : juce::Colour (0xffe8a94c));
-        g.drawText (phaseOk ? "[OK] PHASE LOCKED" : "[!] FREE DELAY", topBar, juce::Justification::centredRight);
-    }
-}
-
-void Studio4MicStagePad::mouseMove (const juce::MouseEvent& e)
-{
-    auto area = getLocalBounds().toFloat().reduced (2.0f);
-    float dist = 0.0f;
-    const int nearest = findTargetStand (e.position, area, dist, true);
-    const int newHover = (dist < 40.0f) ? nearest : -1;
-
-    if (newHover != hoveredStand)
-    {
-        hoveredStand = newHover;
-        setMouseCursor (hoveredStand >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
-        repaint();
-    }
-}
-
-void Studio4MicStagePad::mouseExit (const juce::MouseEvent&)
-{
-    hoveredStand = -1;
-    if (! isDragging) setMouseCursor (juce::MouseCursor::NormalCursor);
-    repaint();
-}
-
-void Studio4MicStagePad::mouseDown (const juce::MouseEvent& e)
-{
-    auto area = getLocalBounds().toFloat().reduced (2.0f);
-    float dist = 0.0f;
-    const int target = findTargetStand (e.position, area, dist, true);
-    setSelectedStand (target);
-    isDragging = true;
-    setMouseCursor (juce::MouseCursor::DraggingHandCursor);
-
-    const auto currentBase = getStandBasePos (selectedStand, area);
-    if (dist < 48.0f)
-        dragOffset = currentBase - e.position;
-    else
-    {
-        dragOffset = { 0.0f, 0.0f };
-        updateStandFromBasePoint (selectedStand, e.position, area);
-    }
-    repaint();
-}
-
-void Studio4MicStagePad::mouseDoubleClick (const juce::MouseEvent& e)
-{
-    auto area = getLocalBounds().toFloat().reduced (2.0f);
-    float dist = 0.0f;
-    const int nearest = findTargetStand (e.position, area, dist, true);
-    if (dist < 48.0f)
-    {
-        setSelectedStand (nearest);
-        centerStand (nearest);
-    }
-}
-
-void Studio4MicStagePad::mouseDrag (const juce::MouseEvent& e)
-{
-    if (! isDragging) return;
-    auto area = getLocalBounds().toFloat().reduced (2.0f);
-    updateStandFromBasePoint (selectedStand, e.position + dragOffset, area);
-}
-
-void Studio4MicStagePad::mouseUp (const juce::MouseEvent& e)
-{
-    isDragging = false;
-    mouseMove (e);
-}
-
-void Studio4MicStagePad::updateStandFromBasePoint (int idx, juce::Point<float> targetBase, juce::Rectangle<float> area)
-{
-    const float yTop = area.getY() + area.getHeight() * 0.75f;
-    const float yBot = area.getBottom() - 14.0f;
-
-    const float normY = juce::jlimit (0.0f, 1.0f, (targetBase.y - yTop) / std::max (1.0f, yBot - yTop));
-    const float halfW = juce::jmap (normY, 0.0f, 1.0f, area.getWidth() * 0.30f, area.getWidth() * 0.43f);
-    float normX = juce::jlimit (0.0f, 1.0f, 0.5f + 0.5f * ((targetBase.x - area.getCentreX()) / std::max (1.0f, halfW)));
-
-    if (snapToCenter && std::abs (normX - 0.5f) < 0.032f)
-        normX = 0.5f;
-
-    const juce::String pfx = "mic" + juce::String (idx + 1);
-    if (auto* pX = apvts.getParameter (pfx + "X")) pX->setValueNotifyingHost (normX);
-    if (auto* pY = apvts.getParameter (pfx + "Y")) pY->setValueNotifyingHost (normY);
-
-    if (linkAirDecca && (idx == 2 || idx == 3))
-    {
-        const int partner = (idx == 2) ? 3 : 2;
-        const juce::String partnerPfx = "mic" + juce::String (partner + 1);
-        if (auto* ppX = apvts.getParameter (partnerPfx + "X")) ppX->setValueNotifyingHost (1.0f - normX);
-        if (auto* ppY = apvts.getParameter (partnerPfx + "Y")) ppY->setValueNotifyingHost (normY);
-    }
-}
-
-//==============================================================================
-// BenBocazStudioProEditor
-//==============================================================================
-BenBocazStudioProEditor::BenBocazStudioProEditor (BenBocazStudioProProcessor& p)
-    : AudioProcessorEditor (&p), audioProcessor (p), vuMeter (p), roomPad (p)
-{
-    setLookAndFeel (&rusticLAF);
-    setSize (1260, 790);
-
-    loadEmbeddedImages();
-
-    addAndMakeVisible (vuMeter);
-    addAndMakeVisible (roomPad);
-
-    roomPad.onSelectedStandChanged = [this] (int selIdx) { updateSelectedStandButtonsUI (selIdx); };
-
-    presetLbl.setText ("PRESETS", juce::dontSendNotification);
-    presetLbl.setColour (juce::Label::textColourId, juce::Colour (0xffe5a94c));
-    presetLbl.setFont (juce::Font (juce::FontOptions (9.6f).withStyle ("Bold")));
-    addAndMakeVisible (presetLbl);
-
-    presetBox.addItemList ({
-        "01. Simple 2-Mic Clean (Default)",
-        "02. Vocal C-800G Warm & Air",
-        "03. Shangri-La Live Drums",
-        "04. Canyon Guitar Stereo",
-        "05. Bass Amp Low Weight",
-        "06. Swedien NS-10 Re-Mic"
-    }, 1);
-    presetBox.setSelectedItemIndex (0, juce::dontSendNotification);
-    presetBox.onChange = [this] { applyFactoryPreset (presetBox.getSelectedItemIndex()); };
-    addAndMakeVisible (presetBox);
-
-    snapCenterBtn.setToggleState (true, juce::dontSendNotification);
-    snapCenterBtn.onClick = [this] { roomPad.setSnapToCenter (snapCenterBtn.getToggleState()); };
-    addAndMakeVisible (snapCenterBtn);
-
-    link34Btn.onClick = [this] { roomPad.setLinkAirDecca (link34Btn.getToggleState()); };
-    addAndMakeVisible (link34Btn);
-
-    centerSelBtn.onClick = [this] { roomPad.centerStand (roomPad.getSelectedStand()); };
-    addAndMakeVisible (centerSelBtn);
-
-    tipsBtn.setClickingTogglesState (true);
-    tipsBtn.onClick = [this] { roomPad.setShowTipsOverlay (tipsBtn.getToggleState()); };
-    addAndMakeVisible (tipsBtn);
-
-    expandStageBtn.setClickingTogglesState (true);
-    expandStageBtn.onClick = [this]
-    {
-        stageExpanded = expandStageBtn.getToggleState();
-        expandStageBtn.setButtonText (stageExpanded ? "SHOW RACKS" : "EXPAND STAGE");
-        resized();
-        repaint();
-    };
-    addAndMakeVisible (expandStageBtn);
-
-    auto setupSolo = [this] (juce::TextButton& b, int idx)
-    {
-        b.setClickingTogglesState (true);
-        b.onClick = [this, idx]
-        {
-            const int current = audioProcessor.getSoloStand();
-            audioProcessor.setSoloStand (current == idx ? -1 : idx);
-            updateSoloButtonsUI();
-            roomPad.repaint();
-        };
-        addAndMakeVisible (b);
-    };
-    setupSolo (solo1Btn, 0);
-    setupSolo (solo2Btn, 1);
-    setupSolo (solo3Btn, 2);
-    setupSolo (solo4Btn, 3);
-
-    addAndMakeVisible (phaseAlignBtn);
-    addAndMakeVisible (phaseInvBtn);
-    addAndMakeVisible (vocalModBtn);
-    addAndMakeVisible (mainStereoBtn);
-    addAndMakeVisible (roomOnBtn);
-    addAndMakeVisible (chamberOnBtn);
-    addAndMakeVisible (eqOnBtn);
-    addAndMakeVisible (compOnBtn);
-    addAndMakeVisible (compScLinkBtn);
-    addAndMakeVisible (compScFiltBtn);
-    addAndMakeVisible (parCompOnBtn);
-
-    vuModeBtn.onClick = [this]
-    {
-        const bool next = ! vuMeter.isShowingGainReduction();
-        vuMeter.setShowGainReduction (next);
-        vuModeBtn.setButtonText (next ? "VU: GR" : "VU: OUT");
-    };
-    addAndMakeVisible (vuModeBtn);
-
-    loadIRBtn.onClick = [this] { openIRFileChooser(); };
-    addAndMakeVisible (loadIRBtn);
-
-    irNameLbl.setText (audioProcessor.getLoadedIRName(), juce::dontSendNotification);
-    irNameLbl.setJustificationType (juce::Justification::centredLeft);
-    irNameLbl.setColour (juce::Label::textColourId, juce::Colour (0xffc9b99e));
-    irNameLbl.setFont (juce::Font (juce::FontOptions (9.5f)));
-    addAndMakeVisible (irNameLbl);
-
-    setupCombo (modeBox,      { "Reverb", "Re-Mic" }, modeLbl, "MODE");
-    setupCombo (chainBox,     { "EQ -> Comp -> Chamber", "Comp -> EQ -> Chamber", "Chamber -> Comp -> EQ" }, chainLbl, "ROUTING");
-    setupCombo (vocalSrcBox,  { "Shure SM27", "Shure SM57", "Shure SM7B", "Generic LDC" }, vocalSrcLbl, "YOUR INPUT MIC");
-    setupCombo (vocalTgtBox,  { "Sony C-800G", "Neumann TLM 103", "Aston Origin" }, vocalTgtLbl, "TARGET VOCAL MIC");
-    setupCombo (sourceBox,    { "Vocals", "Drums", "Ensemble", "Monitors (Swedien)", "Guitar Cab (Mono)", "Guitar Cab (Stereo)", "Bass Amp (Low End)" }, sourceLbl, "ROOM SOURCE");
-    setupCombo (monitorBox,   { "Altec Main", "NS-10 Nearfield", "JBL PA Wedge" }, monitorLbl, "MONITOR SPEAKER");
-    setupCombo (roomBox,      { "Studio A (Shangri-La)", "Studio B (Canyon)" }, roomLbl, "STUDIO ROOM");
-    setupCombo (wallsBox,     { "Tight / Damped", "Live / Cedar Wood" }, wallsLbl, "ROOM WALLS");
-    setupCombo (eqTubeBox,    { "Neve Class-A", "Pultec 12AX7", "API 2520", "SSL Clean" }, eqTubeLbl, "TUBE CIRCUIT");
-    setupCombo (chamberBox,   { "Chamber 1 (Bright)", "Chamber 3 (Classic)", "Chamber 5 (Deep)", "Chamber 8 (Dense)", "Custom WAV IR" }, chamberLbl, "ECHO CHAMBER");
-    setupCombo (eqTypeBox,    { "Neve 1073 (British)", "Pultec EQP-1A (Tube)", "API 550A (Punch)", "SSL 4000E (Clean)" }, eqTypeLbl, "EQ MODEL");
-    setupCombo (compBox,      { "1176LN (FET)", "LA-2A (Opto)", "Mastering (Tube)" }, compLbl, "COMP MODEL");
-    setupCombo (parRouteBox,  { "All Bus", "Room Mics", "Chamber" }, parRouteLbl, "PAR ROUTE");
-
-    eqLowFreqBox.addItemList  ({ "60 Hz", "110 Hz", "220 Hz" }, 1);
-    eqMidFreqBox.addItemList  ({ "700 Hz", "1.6 kHz", "3.2 kHz", "4.8 kHz" }, 1);
-    eqHighFreqBox.addItemList ({ "10 kHz", "12 kHz", "16 kHz" }, 1);
-    addAndMakeVisible (eqLowFreqBox);
-    addAndMakeVisible (eqMidFreqBox);
-    addAndMakeVisible (eqHighFreqBox);
-
-    setupKnob (vocalInSlider,    vocalInLbl,    "MIC IN");
-    setupKnob (vocalOutSlider,   vocalOutLbl,   "MIC OUT");
-    setupKnob (driveSlider,      driveLbl,      "TUBE / TAPE DRIVE");
-
-    setupStandKnob (mic1GainSlider, mic1SelBtn, "1: MAIN",  0);
-    setupStandKnob (mic2GainSlider, mic2SelBtn, "2: MID",   1);
-    setupStandKnob (mic3GainSlider, mic3SelBtn, "3: AIR",   2);
-    setupStandKnob (mic4GainSlider, mic4SelBtn, "4: DECCA", 3);
-    updateSelectedStandButtonsUI (0);
-
-    setupKnob (pairWidthSlider,  pairWidthLbl,  "PAIR WIDE");
-    setupKnob (deccaWidthSlider, deccaWidthLbl, "DECCA WIDE");
-    setupKnob (chMixSlider,      chMixLbl,      "SEND");
-    setupKnob (chDecaySlider,    chDecayLbl,    "DECAY");
-    setupKnob (chPreSlider,      chPreLbl,      "PRE-DELAY");
-    setupKnob (chWidthSlider,    chWidthLbl,    "WIDTH");
-
-    setupKnob (eqHpfSlider,      eqHpfLbl,      "HPF");
-    setupKnob (eqLowSlider,      eqLowLbl,      "LOW");
-    setupKnob (eqMidSlider,      eqMidLbl,      "MID");
-    setupKnob (eqHighSlider,     eqHighLbl,     "HIGH");
-
-    setupKnob (compThreshSlider, compThreshLbl, "THRESHOLD");
-    setupKnob (compMixSlider,    compMixLbl,    "MIX");
-    setupKnob (parAmtSlider,     parAmtLbl,     "PAR BLEND");
-    setupKnob (outGainSlider,    outGainLbl,    "OUTPUT");
-
-    auto& v = audioProcessor.apvts;
-    phaseAlignAtt = std::make_unique<ButtonAtt> (v, "phaseAlign", phaseAlignBtn);
-    phaseInvAtt   = std::make_unique<ButtonAtt> (v, "phaseInvert", phaseInvBtn);
-    vocalModAtt   = std::make_unique<ButtonAtt> (v, "vocalModOn", vocalModBtn);
-    mainStereoAtt = std::make_unique<ButtonAtt> (v, "mainStereo", mainStereoBtn);
-    roomOnAtt     = std::make_unique<ButtonAtt> (v, "roomOn", roomOnBtn);
-    chamberOnAtt  = std::make_unique<ButtonAtt> (v, "chamberOn", chamberOnBtn);
-    eqOnAtt       = std::make_unique<ButtonAtt> (v, "eqOn", eqOnBtn);
-    compOnAtt     = std::make_unique<ButtonAtt> (v, "compOn", compOnBtn);
-    compScLinkAtt = std::make_unique<ButtonAtt> (v, "compScLink", compScLinkBtn);
-    compScFiltAtt = std::make_unique<ButtonAtt> (v, "compScFilter", compScFiltBtn);
-    parCompOnAtt  = std::make_unique<ButtonAtt> (v, "parCompOn", parCompOnBtn);
-
-    modeAtt       = std::make_unique<ComboAtt> (v, "mode", modeBox);
-    chainAtt      = std::make_unique<ComboAtt> (v, "chainOrder", chainBox);
-    vocalSrcAtt   = std::make_unique<ComboAtt> (v, "vocalSrcMic", vocalSrcBox);
-    vocalTgtAtt   = std::make_unique<ComboAtt> (v, "vocalTgtMic", vocalTgtBox);
-    sourceAtt     = std::make_unique<ComboAtt> (v, "source", sourceBox);
-    monitorAtt    = std::make_unique<ComboAtt> (v, "monitorType", monitorBox);
-    roomAtt       = std::make_unique<ComboAtt> (v, "room", roomBox);
-    wallsAtt      = std::make_unique<ComboAtt> (v, "walls", wallsBox);
-    chamberAtt    = std::make_unique<ComboAtt> (v, "chamberType", chamberBox);
-    eqTypeAtt     = std::make_unique<ComboAtt> (v, "eqType", eqTypeBox);
-    eqTubeAtt     = std::make_unique<ComboAtt> (v, "eqTubeModel", eqTubeBox);
-    eqLowFreqAtt  = std::make_unique<ComboAtt> (v, "eqLowFreq", eqLowFreqBox);
-    eqMidFreqAtt  = std::make_unique<ComboAtt> (v, "eqMidFreq", eqMidFreqBox);
-    eqHighFreqAtt = std::make_unique<ComboAtt> (v, "eqHighFreq", eqHighFreqBox);
-    compAtt       = std::make_unique<ComboAtt> (v, "compType", compBox);
-    parRouteAtt   = std::make_unique<ComboAtt> (v, "parCompRoute", parRouteBox);
-
-    sourceBox.onChange = [this]
-    {
-        const int srcIdx = sourceBox.getSelectedItemIndex();
-        const bool isMonoSource = (srcIdx == 0 || srcIdx == 4 || srcIdx == 6);
-        if (auto* pMainSt = audioProcessor.apvts.getParameter ("mainStereo"))
-            pMainSt->setValueNotifyingHost (isMonoSource ? 0.0f : 1.0f);
-        roomPad.repaint();
-    };
-
-    vocalInAtt    = std::make_unique<SliderAtt> (v, "vocalInGain", vocalInSlider);
-    vocalOutAtt   = std::make_unique<SliderAtt> (v, "vocalOutGain", vocalOutSlider);
-    driveAtt      = std::make_unique<SliderAtt> (v, "consoleDrive", driveSlider);
-    mic1GainAtt   = std::make_unique<SliderAtt> (v, "mic1Gain", mic1GainSlider);
-    mic2GainAtt   = std::make_unique<SliderAtt> (v, "mic2Gain", mic2GainSlider);
-    mic3GainAtt   = std::make_unique<SliderAtt> (v, "mic3Gain", mic3GainSlider);
-    mic4GainAtt   = std::make_unique<SliderAtt> (v, "mic4Gain", mic4GainSlider);
-    pairWidthAtt  = std::make_unique<SliderAtt> (v, "pairSpread", pairWidthSlider);
-    deccaWidthAtt = std::make_unique<SliderAtt> (v, "deccaWidth", deccaWidthSlider);
-    chMixAtt      = std::make_unique<SliderAtt> (v, "chamberMix", chMixSlider);
-    chDecayAtt    = std::make_unique<SliderAtt> (v, "chamberDecay", chDecaySlider);
-    chPreAtt      = std::make_unique<SliderAtt> (v, "chamberPreDelay", chPreSlider);
-    chWidthAtt    = std::make_unique<SliderAtt> (v, "chamberWidth", chWidthSlider);
-    eqHpfAtt      = std::make_unique<SliderAtt> (v, "eqHpf", eqHpfSlider);
-    eqLowAtt      = std::make_unique<SliderAtt> (v, "eqLow", eqLowSlider);
-    eqMidAtt      = std::make_unique<SliderAtt> (v, "eqMid", eqMidSlider);
-    eqHighAtt     = std::make_unique<SliderAtt> (v, "eqHigh", eqHighSlider);
-    compThreshAtt = std::make_unique<SliderAtt> (v, "compThresh", compThreshSlider);
-    compMixAtt    = std::make_unique<SliderAtt> (v, "compMix", compMixSlider);
-    parAmtAtt     = std::make_unique<SliderAtt> (v, "parCompAmt", parAmtSlider);
-    outGainAtt    = std::make_unique<SliderAtt> (v, "outputGain", outGainSlider);
-}
-
-BenBocazStudioProEditor::~BenBocazStudioProEditor() { setLookAndFeel (nullptr); }
-
-void BenBocazStudioProEditor::updateSoloButtonsUI()
-{
-    const int s = audioProcessor.getSoloStand();
-    solo1Btn.setToggleState (s == 0, juce::dontSendNotification);
-    solo2Btn.setToggleState (s == 1, juce::dontSendNotification);
-    solo3Btn.setToggleState (s == 2, juce::dontSendNotification);
-    solo4Btn.setToggleState (s == 3, juce::dontSendNotification);
-}
-
-void BenBocazStudioProEditor::updateSelectedStandButtonsUI (int selIdx)
-{
-    mic1SelBtn.setToggleState (selIdx == 0, juce::dontSendNotification);
-    mic2SelBtn.setToggleState (selIdx == 1, juce::dontSendNotification);
-    mic3SelBtn.setToggleState (selIdx == 2, juce::dontSendNotification);
-    mic4SelBtn.setToggleState (selIdx == 3, juce::dontSendNotification);
-}
-
-void BenBocazStudioProEditor::applyFactoryPreset (int idx)
-{
-    auto setParam = [this] (const juce::String& id, float plainVal)
-    {
-        if (auto* param = audioProcessor.apvts.getParameter (id))
-            param->setValueNotifyingHost (param->convertTo0to1 (plainVal));
-    };
-
-    if (idx == 0)
-    {
-        setParam ("mode", 1); setParam ("source", 0); setParam ("roomOn", 1); setParam ("mainStereo", 0);
-        setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.16f); setParam ("mic1Gain", 1.0f);
-        setParam ("mic2X", -0.38f); setParam ("mic2Y", 0.48f); setParam ("mic2Gain", 0.25f);
-        setParam ("mic3Gain", 0.0f); setParam ("mic4Gain", 0.0f);
-        setParam ("chamberMix", 0.16f); setParam ("eqLow", 0.0f); setParam ("eqMid", 0.0f); setParam ("eqHigh", 0.0f);
-        setParam ("parCompOn", 0);
-    }
-    else if (idx == 1)
-    {
-        setParam ("mode", 1); setParam ("source", 0); setParam ("room", 0); setParam ("walls", 1);
-        setParam ("vocalModOn", 1); setParam ("vocalSrcMic", 2); setParam ("vocalTgtMic", 0);
-        setParam ("mainStereo", 0); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.16f);
-        setParam ("mic1Gain", 1.05f); setParam ("mic2Gain", 0.25f); setParam ("mic3Gain", 0.30f); setParam ("mic4Gain", 0.0f);
-        setParam ("eqType", 1); setParam ("eqHighFreq", 2); setParam ("eqHigh", 2.0f);
-        setParam ("compType", 1); setParam ("compMix", 0.85f); setParam ("chamberMix", 0.22f);
-    }
-    else if (idx == 2)
-    {
-        setParam ("mode", 1); setParam ("source", 1); setParam ("room", 0); setParam ("walls", 1);
-        setParam ("mainStereo", 1); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.24f);
-        setParam ("mic1Gain", 0.95f); setParam ("mic2Gain", 0.65f); setParam ("mic3Gain", 0.55f); setParam ("mic4Gain", 0.50f);
-        setParam ("pairSpread", 1.15f); setParam ("deccaWidth", 1.20f);
-        setParam ("eqType", 2); setParam ("parCompOn", 1); setParam ("parCompRoute", 1); setParam ("parCompAmt", 0.55f);
-    }
-    else if (idx == 3)
-    {
-        setParam ("mode", 1); setParam ("source", 5); setParam ("room", 1); setParam ("walls", 1);
-        setParam ("mainStereo", 1); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.20f);
-        setParam ("mic1Gain", 1.0f); setParam ("mic2Gain", 0.50f); setParam ("mic3Gain", 0.45f); setParam ("mic4Gain", 0.30f);
-        setParam ("eqType", 0); setParam ("eqMidFreq", 2); setParam ("eqMid", 1.8f);
-    }
-    else if (idx == 4)
-    {
-        setParam ("mode", 1); setParam ("source", 6); setParam ("room", 1); setParam ("walls", 0);
-        setParam ("mainStereo", 0); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.14f);
-        setParam ("mic1Gain", 1.10f); setParam ("mic2Gain", 0.32f); setParam ("mic3Gain", 0.0f); setParam ("mic4Gain", 0.22f);
-        setParam ("eqType", 0); setParam ("eqLowFreq", 1); setParam ("eqLow", 2.5f);
-        setParam ("compType", 0); setParam ("compScFilter", 1);
-    }
-    else
-    {
-        setParam ("mode", 1); setParam ("source", 3); setParam ("monitorType", 1); setParam ("room", 0);
-        setParam ("mainStereo", 1); setParam ("mic1Gain", 0.85f); setParam ("mic2Gain", 0.55f);
-        setParam ("mic3Gain", 0.45f); setParam ("mic4Gain", 0.0f); setParam ("consoleDrive", 0.32f);
-    }
-}
-
-void BenBocazStudioProEditor::loadEmbeddedImages()
+void Studio4MicStagePad::loadEmbeddedImages()
 {
 #if HAS_CUSTOM_ASSETS
     for (int i = 0; i < BinaryData::namedResourceListSize; ++i)
     {
-        juce::String resName (BinaryData::namedResourceList[i]);
+        const juce::String name(BinaryData::namedResourceList[i]);
         int dataSize = 0;
-        if (const char* data = BinaryData::getNamedResource (BinaryData::namedResourceList[i], dataSize))
-        {
-            auto img = juce::ImageFileFormat::loadFrom (data, static_cast<size_t> (dataSize));
-            if (! img.isValid()) continue;
+        const char* data = BinaryData::getNamedResource(BinaryData::namedResourceList[i], dataSize);
+        if (!data || dataSize <= 0) continue;
 
-            if (resName.containsIgnoreCase ("canyon"))
-                roomPad.setCanyonImage (img);
-            else if (resName.containsIgnoreCase ("shangri"))
-                roomPad.setShangriLaImage (img);
-            else if (resName.containsIgnoreCase ("chassis") || resName.containsIgnoreCase ("wood"))
-                chassisImage = img;
-            else if (resName.containsIgnoreCase ("vocals"))
-                roomPad.setSourceImage (0, img);
-            else if (resName.containsIgnoreCase ("drums"))
-                roomPad.setSourceImage (1, img);
-            else if (resName.containsIgnoreCase ("ensemble"))
-                roomPad.setSourceImage (2, img);
-            else if (resName.containsIgnoreCase ("monitors"))
-                roomPad.setSourceImage (3, img);
-            else if (resName.containsIgnoreCase ("guitar_mono"))
-                roomPad.setSourceImage (4, img);
-            else if (resName.containsIgnoreCase ("guitar_stereo"))
-                roomPad.setSourceImage (5, img);
-            else if (resName.containsIgnoreCase ("bass"))
-                roomPad.setSourceImage (6, img);
-            else if (resName.containsIgnoreCase ("main_mono"))
-                roomPad.setMicImage (0, img);
-            else if (resName.containsIgnoreCase ("main_xy"))
-                roomPad.setMicImage (1, img);
-            else if (resName.containsIgnoreCase ("stereo_pair"))
-                roomPad.setMicImage (2, img);
-            else if (resName.containsIgnoreCase ("decca"))
-                roomPad.setMicImage (3, img);
-            else if (resName.containsIgnoreCase ("room"))
-                roomPad.setShangriLaImage (img);
-        }
+        auto loadImg = [&]() { return juce::ImageFileFormat::loadFrom(data, static_cast<size_t>(dataSize)); };
+
+        if (name.containsIgnoreCase("volcano") && name.containsIgnoreCase("open"))         imgVolcanoOpen = loadImg();
+        else if (name.containsIgnoreCase("volcano") && name.containsIgnoreCase("closed"))  imgVolcanoClosed = loadImg();
+        else if (name.containsIgnoreCase("shangri"))                                       imgShangrila = loadImg();
+        else if (name.containsIgnoreCase("canyon"))                                        imgCanyon = loadImg();
+        else if (name.containsIgnoreCase("mic_main_mono"))                                 imgMicMono = removeGreenScreen(loadImg());
+        else if (name.containsIgnoreCase("mic_main_xy"))                                   imgMicXY = removeGreenScreen(loadImg());
+        else if (name.containsIgnoreCase("mic_stereo_pair"))                               imgMicPair = removeGreenScreen(loadImg());
+        else if (name.containsIgnoreCase("mic_far_l"))                                     imgMicFarL = removeGreenScreen(loadImg());
+        else if (name.containsIgnoreCase("mic_far_r"))                                     imgMicFarR = removeGreenScreen(loadImg());
+        else if (name.containsIgnoreCase("src_drums"))                                     imgSrcDrums = removeGreenScreen(loadImg());
+        else if (name.containsIgnoreCase("src_bass"))                                      imgSrcBass = removeGreenScreen(loadImg());
+        else if (name.containsIgnoreCase("src_ensemble"))                                  imgSrcEnsemble = removeGreenScreen(loadImg());
     }
 #endif
 }
 
-void BenBocazStudioProEditor::openIRFileChooser()
+void Studio4MicStagePad::setSelectedMic(int idx)
 {
-    fileChooser = std::make_unique<juce::FileChooser> ("Select Studio or Chamber IR (.wav)", juce::File{}, "*.wav;*.aiff;*.aif");
-    auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+    selectedMic = std::clamp(idx, 0, 3);
+    repaint();
+}
 
-    fileChooser->launchAsync (flags, [this] (const juce::FileChooser& fc)
+void Studio4MicStagePad::centerSelectedMic()
+{
+    if (selectedMic == 2 || selectedMic == 3)
     {
-        auto file = fc.getResult();
-        if (file.existsAsFile())
-        {
-            audioProcessor.loadCustomIR (file);
-            irNameLbl.setText (audioProcessor.getLoadedIRName(), juce::dontSendNotification);
-            chamberBox.setSelectedItemIndex (4, juce::sendNotification);
-        }
+        setMicPos(2, 0.14f, 0.86f);
+        setMicPos(3, 0.86f, 0.86f);
+    }
+    else
+    {
+        const char* yId = (selectedMic == 0) ? "mic1Y" : "mic2Y";
+        setMicPos(selectedMic, 0.50f, apvts.getRawParameterValue(yId)->load());
+    }
+    repaint();
+}
+
+juce::Point<float> Studio4MicStagePad::normToScreen(float nx, float ny, juce::Rectangle<float> area) const
+{
+    // Perspectiva levemente elevada: ny=0 cerca del fondo (fuente), ny=1 frente/extremo
+    const float yTop = area.getY() + area.getHeight() * 0.56f;
+    const float yBot = area.getBottom() - area.getHeight() * 0.05f;
+    const float sy = yTop + ny * (yBot - yTop);
+
+    const float spread = 0.52f + 0.44f * ny;
+    const float sx = area.getCentreX() + (nx - 0.5f) * area.getWidth() * spread;
+    return { sx, sy };
+}
+
+juce::Point<float> Studio4MicStagePad::screenToNorm(juce::Point<float> pt, juce::Rectangle<float> area) const
+{
+    const float yTop = area.getY() + area.getHeight() * 0.56f;
+    const float yBot = area.getBottom() - area.getHeight() * 0.05f;
+    const float ny = std::clamp((pt.y - yTop) / std::max(1.0f, yBot - yTop), 0.05f, 0.95f);
+
+    const float spread = 0.52f + 0.44f * ny;
+    const float nx = std::clamp(0.5f + (pt.x - area.getCentreX()) / std::max(1.0f, area.getWidth() * spread), 0.05f, 0.95f);
+    return { nx, ny };
+}
+
+void Studio4MicStagePad::setMicPos(int idx, float nx, float ny)
+{
+    static constexpr const char* xIds[4] = { "mic1X", "mic2X", "mic3X", "mic4X" };
+    static constexpr const char* yIds[4] = { "mic1Y", "mic2Y", "mic3Y", "mic4Y" };
+
+    if (auto* px = apvts.getParameter(xIds[idx])) px->setValueNotifyingHost(px->convertTo0to1(nx));
+    if (auto* py = apvts.getParameter(yIds[idx])) py->setValueNotifyingHost(py->convertTo0to1(ny));
+}
+
+void Studio4MicStagePad::paint(juce::Graphics& g)
+{
+    auto area = getLocalBounds().toFloat().reduced(2.0f);
+    const int roomIdx   = static_cast<int>(apvts.getRawParameterValue("room")->load());
+    const int wallsIdx  = static_cast<int>(apvts.getRawParameterValue("walls")->load());
+    const int srcIdx    = static_cast<int>(apvts.getRawParameterValue("source")->load());
+    const bool mainSt   = apvts.getRawParameterValue("mainStereo")->load() > 0.5f;
+    const bool phaseOk  = apvts.getRawParameterValue("phaseSafe")->load() > 0.5f;
+
+    // 1. Fondo de sala
+    const juce::Image* roomImg = nullptr;
+    if (roomIdx == 0)      roomImg = (wallsIdx == 0) ? &imgVolcanoOpen : &imgVolcanoClosed;
+    else if (roomIdx == 1) roomImg = &imgShangrila;
+    else                   roomImg = &imgCanyon;
+
+    if (roomImg && roomImg->isValid())
+        g.drawImageWithin(*roomImg, area.toNearestInt().getX(), area.toNearestInt().getY(),
+                          area.toNearestInt().getWidth(), area.toNearestInt().getHeight(),
+                          juce::RectanglePlacement::fillDestination);
+    else
+    {
+        g.setColour(juce::Colour(0xff231913));
+        g.fillRoundedRectangle(area, 4.0f);
+    }
+
+    // 2. Fuente al fondo (Drums / Bass / Ensemble)
+    const juce::Image* srcImg = (srcIdx == 1) ? &imgSrcDrums : (srcIdx == 2 ? &imgSrcBass : (srcIdx == 4 ? &imgSrcEnsemble : nullptr));
+    if (srcImg && srcImg->isValid())
+    {
+        const float sh = area.getHeight() * 0.30f;
+        const float sw = sh * (static_cast<float>(srcImg->getWidth()) / std::max(1, srcImg->getHeight()));
+        g.drawImage(*srcImg, juce::Rectangle<float>(area.getCentreX() - sw * 0.5f, area.getY() + area.getHeight() * 0.34f, sw, sh));
+    }
+
+    // 3. Dibujar 4 atriles ordenados por profundidad (Y)
+    static constexpr const char* xIds[4] = { "mic1X", "mic2X", "mic3X", "mic4X" };
+    static constexpr const char* yIds[4] = { "mic1Y", "mic2Y", "mic3Y", "mic4Y" };
+    static constexpr const char* gIds[4] = { "mic1Gain", "mic2Gain", "mic3Gain", "mic4Gain" };
+    static constexpr const char* labels[4] = { "1:MAIN", "2:ROOM", "3:FAR L", "4:FAR R" };
+
+    std::array<int, 4> order { 0, 1, 2, 3 };
+    std::sort(order.begin(), order.end(), [&](int a, int b)
+    {
+        return apvts.getRawParameterValue(yIds[a])->load() < apvts.getRawParameterValue(yIds[b])->load();
     });
-}
 
-void BenBocazStudioProEditor::setupKnob (juce::Slider& slider, juce::Label& label, const juce::String& text)
-{
-    slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 14);
-    slider.setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffe0d1b8));
-    slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-    addAndMakeVisible (slider);
-
-    label.setText (text, juce::dontSendNotification);
-    label.setJustificationType (juce::Justification::centred);
-    label.setColour (juce::Label::textColourId, juce::Colour (0xffe5b05c));
-    label.setFont (juce::Font (juce::FontOptions (9.0f).withStyle ("Bold")));
-    addAndMakeVisible (label);
-}
-
-void BenBocazStudioProEditor::setupStandKnob (juce::Slider& slider, juce::TextButton& selectBtn, const juce::String& text, int standIdx)
-{
-    slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 14);
-    slider.setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffe0d1b8));
-    slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-    slider.onDragStart = [this, standIdx] { roomPad.setSelectedStand (standIdx); };
-    addAndMakeVisible (slider);
-
-    selectBtn.setButtonText (text);
-    selectBtn.setClickingTogglesState (false);
-    selectBtn.onClick = [this, standIdx] { roomPad.setSelectedStand (standIdx); };
-    addAndMakeVisible (selectBtn);
-}
-
-void BenBocazStudioProEditor::setupCombo (juce::ComboBox& box, const juce::StringArray& items, juce::Label& label, const juce::String& text)
-{
-    box.addItemList (items, 1);
-    addAndMakeVisible (box);
-
-    label.setText (text, juce::dontSendNotification);
-    label.setJustificationType (juce::Justification::centredLeft);
-    label.setColour (juce::Label::textColourId, juce::Colour (0xffc9b89e));
-    label.setFont (juce::Font (juce::FontOptions (8.9f).withStyle ("Bold")));
-    addAndMakeVisible (label);
-}
-
-void BenBocazStudioProEditor::paint (juce::Graphics& g)
-{
-    auto bounds = getLocalBounds();
-
-    if (chassisImage.isValid())
+    for (int idx : order)
     {
-        g.drawImage (chassisImage, bounds.toFloat(), juce::RectanglePlacement::fillDestination);
-        g.setColour (juce::Colour (0xff140f0b).withAlpha (0.24f));
-        g.fillRect (bounds);
-    }
-    else
-    {
-        juce::ColourGradient bg (juce::Colour (0xff2b221a), 0.0f, 0.0f,
-                                 juce::Colour (0xff140f0c), 0.0f, static_cast<float> (getHeight()), false);
-        g.setGradientFill (bg);
-        g.fillRect (bounds);
+        const float nx = apvts.getRawParameterValue(xIds[idx])->load();
+        const float ny = apvts.getRawParameterValue(yIds[idx])->load();
+        const float gain = apvts.getRawParameterValue(gIds[idx])->load();
+        const auto pos = normToScreen(nx, ny, area);
+
+        const float scale = 0.24f + 0.26f * ny;
+        const float micH = area.getHeight() * scale;
+
+        const juce::Image* micImg = nullptr;
+        if (idx == 0)      micImg = mainSt ? &imgMicXY : &imgMicMono;
+        else if (idx == 1) micImg = &imgMicPair;
+        else if (idx == 2) micImg = imgMicFarL.isValid() ? &imgMicFarL : &imgMicMono;
+        else               micImg = imgMicFarR.isValid() ? &imgMicFarR : &imgMicMono;
+
+        const float alpha = (gain > 0.01f) ? 1.0f : 0.45f;
+        g.setOpacity(alpha);
+
+        if (micImg && micImg->isValid())
+        {
+            const float micW = micH * (static_cast<float>(micImg->getWidth()) / std::max(1, micImg->getHeight()));
+            g.drawImage(*micImg, juce::Rectangle<float>(pos.x - micW * 0.5f, pos.y - micH, micW, micH));
+        }
+        else
+        {
+            g.setColour(juce::Colour(0xffd99b43));
+            g.fillEllipse(pos.x - 8.0f, pos.y - 8.0f, 16.0f, 16.0f);
+        }
+
+        g.setOpacity(1.0f);
+
+        // Anillo de seleccion en la base
+        if (idx == selectedMic)
+        {
+            g.setColour(juce::Colour(0xffffb84d));
+            g.drawEllipse(pos.x - 16.0f, pos.y - 6.0f, 32.0f, 11.0f, 2.0f);
+        }
+
+        // Etiqueta flotante con distancia en metros
+        const float distM = BenBocazDSP::AcousticEngine::computeDistanceMeters(roomIdx, nx, ny);
+        const juce::String tag = juce::String(labels[idx]) + " " + juce::String(distM, 1) + "m";
+        const juce::Rectangle<float> tagRect(pos.x - 44.0f, pos.y - micH - 18.0f, 88.0f, 16.0f);
+
+        g.setColour(idx == selectedMic ? juce::Colour(0xd9261b12) : juce::Colour(0xb0140e0a));
+        g.fillRoundedRectangle(tagRect, 3.0f);
+        g.setColour(idx == selectedMic ? juce::Colour(0xffffb84d) : juce::Colour(0xff8c7258));
+        g.drawRoundedRectangle(tagRect, 3.0f, 1.0f);
+        g.setColour(juce::Colour(0xfff5e6d0));
+        g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
+        g.drawFittedText(tag, tagRect.toNearestInt(), juce::Justification::centred, 1);
     }
 
-    auto drawWoodRail = [&] (juce::Rectangle<int> r)
+    // 4. Barra superior de estado dentro del escenario
+    const juce::String roomTitle = (roomIdx == 0) ? (wallsIdx == 0 ? "VOLCANO HALL | GATES OPEN" : "VOLCANO HALL | GATES CLOSED")
+                                 : (roomIdx == 1 ? "SHANGRI-LA | LIVE WOOD" : "CANYON ROOM | STUDIO WOOD");
+    g.setColour(juce::Colour(0xb0120c08));
+    g.fillRect(area.withHeight(20.0f));
+    g.setColour(juce::Colour(0xffe6d2b5));
+    g.setFont(juce::FontOptions(10.5f, juce::Font::bold));
+    g.drawText(roomTitle, area.withHeight(20.0f).reduced(8.0f, 0.0f), juce::Justification::centredLeft);
+
+    g.setColour(phaseOk ? juce::Colour(0xff9be08a) : juce::Colour(0xffe0a85c));
+    g.drawText(phaseOk ? "[OK] PHASE LOCKED" : "NATURAL TIME-OF-FLIGHT",
+               area.withHeight(20.0f).reduced(8.0f, 0.0f), juce::Justification::centredRight);
+
+    g.setColour(juce::Colour(0xff5a4634));
+    g.drawRoundedRectangle(area, 4.0f, 1.5f);
+}
+
+void Studio4MicStagePad::mouseDown(const juce::MouseEvent& e)
+{
+    auto area = getLocalBounds().toFloat().reduced(2.0f);
+    static constexpr const char* xIds[4] = { "mic1X", "mic2X", "mic3X", "mic4X" };
+    static constexpr const char* yIds[4] = { "mic1Y", "mic2Y", "mic3Y", "mic4Y" };
+
+    float bestDist = 48.0f;
+    int bestIdx = -1;
+    for (int i = 0; i < 4; ++i)
     {
-        juce::ColourGradient wood (juce::Colour (0xff5c361c), static_cast<float> (r.getX()), 0.0f,
-                                   juce::Colour (0xff261308), static_cast<float> (r.getRight()), 0.0f, false);
-        g.setGradientFill (wood);
-        g.fillRect (r);
-        g.setColour (juce::Colours::black.withAlpha (0.3f));
-        for (int x = r.getX() + 3; x < r.getRight(); x += 5)
-            g.drawVerticalLine (x, 0.0f, static_cast<float> (getHeight()));
+        const auto p = normToScreen(apvts.getRawParameterValue(xIds[i])->load(),
+                                    apvts.getRawParameterValue(yIds[i])->load(), area);
+        const float d = e.position.getDistanceFrom(p.translated(0.0f, -24.0f));
+        if (d < bestDist)
+        {
+            bestDist = d;
+            bestIdx = i;
+        }
+    }
+
+    if (bestIdx >= 0)
+    {
+        selectedMic = bestIdx;
+        draggingMic = bestIdx;
+        repaint();
+    }
+}
+
+void Studio4MicStagePad::mouseDrag(const juce::MouseEvent& e)
+{
+    if (draggingMic < 0) return;
+
+    auto area = getLocalBounds().toFloat().reduced(2.0f);
+    auto norm = screenToNorm(e.position, area);
+
+    const bool snap = apvts.getRawParameterValue("snapCenter")->load() > 0.5f;
+    const bool link34 = apvts.getRawParameterValue("link34")->load() > 0.5f;
+
+    if (snap && draggingMic < 2 && std::abs(norm.x - 0.5f) < 0.045f)
+        norm.x = 0.5f;
+
+    setMicPos(draggingMic, norm.x, norm.y);
+
+    // Movimiento en espejo para FAR L (2) y FAR R (3)
+    if (link34 && (draggingMic == 2 || draggingMic == 3))
+    {
+        const int other = (draggingMic == 2) ? 3 : 2;
+        setMicPos(other, std::clamp(1.0f - norm.x, 0.05f, 0.95f), norm.y);
+    }
+
+    repaint();
+}
+
+void Studio4MicStagePad::mouseUp(const juce::MouseEvent&)
+{
+    draggingMic = -1;
+}
+
+//==============================================================================
+// Editor Principal
+BenBocazStudioProAudioProcessorEditor::BenBocazStudioProAudioProcessorEditor(BenBocazStudioProAudioProcessor& p)
+    : AudioProcessorEditor(&p), processor(p), stagePad(p.apvts)
+{
+    setLookAndFeel(&lnf);
+    setSize(1260, 790);
+
+#if HAS_CUSTOM_ASSETS
+    for (int i = 0; i < BinaryData::namedResourceListSize; ++i)
+    {
+        if (juce::String(BinaryData::namedResourceList[i]).containsIgnoreCase("chassis_wood"))
+        {
+            int sz = 0;
+            if (const char* d = BinaryData::getNamedResource(BinaryData::namedResourceList[i], sz))
+                imgChassisWood = juce::ImageFileFormat::loadFrom(d, static_cast<size_t>(sz));
+            break;
+        }
+    }
+#endif
+
+    auto addCombo = [this](juce::ComboBox& cb, const char* paramId)
+    {
+        if (auto* choice = dynamic_cast<juce::AudioParameterChoice*>(processor.apvts.getParameter(paramId)))
+            cb.addItemList(choice->choices, 1);
+        addAndMakeVisible(cb);
+        comboAtts.push_back(std::make_unique<ComboAtt>(processor.apvts, paramId, cb));
     };
-    drawWoodRail (bounds.removeFromLeft (18));
-    drawWoodRail (bounds.removeFromRight (18));
 
-    auto header = bounds.removeFromTop (68);
-    g.setColour (juce::Colour (0xff120e0b).withAlpha (0.88f));
-    g.fillRect (header);
-    g.setColour (juce::Colour (0xffe5a94c).withAlpha (0.5f));
-    g.drawHorizontalLine (header.getBottom() - 1, static_cast<float> (header.getX()), static_cast<float> (header.getRight()));
-
-    g.setColour (juce::Colour (0xfff6ead4));
-    g.setFont (juce::Font (juce::FontOptions (21.0f).withStyle ("Bold")));
-    g.drawText ("BEN BOCAZ STUDIO PRO", header.reduced (14, 8).removeFromTop (26), juce::Justification::centredLeft);
-
-    g.setColour (juce::Colour (0xffe5a94c));
-    g.setFont (juce::Font (juce::FontOptions (9.6f).withStyle ("Bold")));
-    g.drawText ("RUSTIC ANALOG ROOMS  |  3D 4-STAND RE-MIC  |  VOCAL MIC MOD",
-                header.reduced (14, 0).withTrimmedTop (38), juce::Justification::centredLeft);
-
-    auto presetBar = bounds.removeFromTop (32);
-    g.setColour (juce::Colour (0xff18120e).withAlpha (0.88f));
-    g.fillRect (presetBar);
-    g.setColour (juce::Colour (0xff5c4935).withAlpha (0.7f));
-    g.drawHorizontalLine (presetBar.getBottom() - 1, static_cast<float> (presetBar.getX()), static_cast<float> (presetBar.getRight()));
-
-    auto drawPanel = [&] (juce::Rectangle<int> r, const juce::String& title)
+    auto addToggle = [this](juce::ToggleButton& bt, const char* paramId)
     {
-        g.setColour (juce::Colour (0xff1a1511).withAlpha (0.78f));
-        g.fillRoundedRectangle (r.toFloat(), 6.0f);
-        g.setColour (juce::Colour (0xff785f44).withAlpha (0.85f));
-        g.drawRoundedRectangle (r.toFloat(), 6.0f, 1.15f);
-
-        g.setColour (juce::Colour (0xffa6885f));
-        g.fillEllipse (static_cast<float> (r.getX() + 6), static_cast<float> (r.getY() + 6), 5.5f, 5.5f);
-        g.fillEllipse (static_cast<float> (r.getRight() - 12), static_cast<float> (r.getY() + 6), 5.5f, 5.5f);
-
-        g.setColour (juce::Colour (0xffe6ab50));
-        g.setFont (juce::Font (juce::FontOptions (10.2f).withStyle ("Bold")));
-        g.drawText (title, r.reduced (18, 5).removeFromTop (16), juce::Justification::centredLeft);
+        addAndMakeVisible(bt);
+        buttonAtts.push_back(std::make_unique<ButtonAtt>(processor.apvts, paramId, bt));
     };
 
-    if (stageExpanded)
+    auto addKnob = [this](juce::Slider& s, const char* paramId, const juce::String& suffix = {})
     {
-        drawPanel ({ 24, 108, 1212, 668 }, "LIVE ROOM 3D STAGE  (EXPANDED VIEW)");
-    }
-    else
-    {
-        drawPanel ({ 24,   108, 256, 450 }, "VOCAL MIC MOD & SOURCE");
-        drawPanel ({ 292,  108, 656, 450 }, "LIVE ROOM 3D STAGE");
-        drawPanel ({ 960,  108, 276, 450 }, "ECHO CHAMBERS & IR");
-        drawPanel ({ 24,   568, 576, 208 }, "ANALOG CONSOLE EQ");
-        drawPanel ({ 612,  568, 476, 208 }, "OUTBOARD & PARALLEL COMP");
-        drawPanel ({ 1100, 568, 136, 208 }, "MASTER");
+        setupKnob(s, suffix);
+        addAndMakeVisible(s);
+        sliderAtts.push_back(std::make_unique<SliderAtt>(processor.apvts, paramId, s));
+    };
 
-        g.setColour (juce::Colour (0xff614e39).withAlpha (0.55f));
-        g.drawHorizontalLine (286, 36.0f, 268.0f);
-        g.drawHorizontalLine (394, 36.0f, 268.0f);
-        g.drawVerticalLine (916, 598.0f, 766.0f);
+    // Top bar
+    addCombo(cbMode, "mode");
+    addCombo(cbRouting, "routing");
+    addToggle(btHqMode, "hqMode");
+    btHqMode.onClick = [this]() { updateHqButtonText(); };
+    updateHqButtonText();
+
+    addToggle(btPhaseSafe, "phaseSafe");
+    addToggle(btPolarity, "polarityInv");
+    addToggle(btSnapCenter, "snapCenter");
+    addToggle(btLink34, "link34");
+
+    for (int i = 0; i < processor.getNumPrograms(); ++i)
+        cbPresets.addItem(processor.getProgramName(i), i + 1);
+    cbPresets.setSelectedId(processor.getCurrentProgram() + 1, juce::dontSendNotification);
+    cbPresets.onChange = [this]()
+    {
+        const int idx = cbPresets.getSelectedId() - 1;
+        if (idx >= 0)
+        {
+            processor.applyFactoryPreset(idx);
+            stagePad.repaint();
+        }
+    };
+    addAndMakeVisible(cbPresets);
+
+    addAndMakeVisible(btCenterMic);
+    btCenterMic.onClick = [this]() { stagePad.centerSelectedMic(); };
+
+    addAndMakeVisible(vuMeter);
+    addAndMakeVisible(btVuMode);
+    btVuMode.onClick = [this]()
+    {
+        vuGrMode = !vuGrMode;
+        btVuMode.setButtonText(vuGrMode ? "VU: GR" : "VU: OUT");
+    };
+
+    addAndMakeVisible(btExpandStage);
+    btExpandStage.onClick = [this]()
+    {
+        expandedStage = !expandedStage;
+        btExpandStage.setButtonText(expandedStage ? "SHOW RACKS" : "EXPAND STAGE");
+        resized();
+    };
+
+    // Stage
+    addToggle(btMainStereo, "mainStereo");
+    addToggle(btRoomOn, "roomOn");
+    addAndMakeVisible(stagePad);
+
+    // Left Panel
+    addToggle(btVocalMod, "vocalModOn");
+    addCombo(cbVocalIn, "vocalInMic");
+    addCombo(cbVocalTarget, "vocalTargetMic");
+    addKnob(slVocalIn, "vocalInGain");   setupLabel(lbVocalIn, "MIC IN");
+    addKnob(slVocalOut, "vocalOutGain"); setupLabel(lbVocalOut, "MIC OUT");
+    addCombo(cbSource, "source");
+    addCombo(cbMonitor, "monitorSpeaker");
+    addCombo(cbRoom, "room");
+    addCombo(cbWalls, "walls");
+    addCombo(cbCircuit, "circuit");
+    addKnob(slDrive, "drive");           setupLabel(lbDrive, "TUBE / TAPE DRIVE");
+
+    // 4 Mics strip
+    static constexpr const char* micBtnNames[4] = { "1: MAIN", "2: ROOM/AIR", "3: FAR L", "4: FAR R" };
+    static constexpr const char* micGainIds[4]  = { "mic1Gain", "mic2Gain", "mic3Gain", "mic4Gain" };
+    static constexpr const char* micSoloIds[4]  = { "mic1Solo", "mic2Solo", "mic3Solo", "mic4Solo" };
+
+    for (int i = 0; i < 4; ++i)
+    {
+        btMicSelect[i].setButtonText(micBtnNames[i]);
+        btMicSelect[i].onClick = [this, i]() { stagePad.setSelectedMic(i); };
+        addAndMakeVisible(btMicSelect[i]);
+        addKnob(slMicGain[i], micGainIds[i]);
+        btMicSolo[i].setButtonText("S");
+        addToggle(btMicSolo[i], micSoloIds[i]);
     }
+    addKnob(slPairWide, "pairWide"); setupLabel(lbPairWide, "ROOM WIDE");
+    addKnob(slFarWide, "farWide");   setupLabel(lbFarWide, "FAR WIDE");
+
+    // Right Panel: Echo Chambers
+    addToggle(btChamberOn, "chamberOn");
+    addCombo(cbChamberModel, "chamberModel");
+    addKnob(slChamberSend, "chamberSend");       setupLabel(lbChSend, "SEND");
+    addKnob(slChamberDecay, "chamberDecay");     setupLabel(lbChDecay, "DECAY");
+    addKnob(slChamberPre, "chamberPreDelay");    setupLabel(lbChPre, "PRE-DELAY");
+    addKnob(slChamberWidth, "chamberWidth");     setupLabel(lbChWidth, "WIDTH");
+
+    // Bottom Left: Console EQ
+    addToggle(btEqOn, "eqOn");
+    addCombo(cbEqModel, "eqModel");
+    addKnob(slHpf, "hpf");           setupLabel(lbHpf, "HPF");
+    addKnob(slLowGain, "lowGain");   setupLabel(lbLow, "LOW");
+    addKnob(slMidGain, "midGain");   setupLabel(lbMid, "MID");
+    addKnob(slHighGain, "highGain"); setupLabel(lbHigh, "HIGH");
+    addCombo(cbLowFreq, "lowFreq");
+    addCombo(cbMidFreq, "midFreq");
+    addCombo(cbHighFreq, "highFreq");
+
+    // Bottom Mid: Outboard & Parallel Comp
+    addToggle(btCompOn, "compOn");
+    addCombo(cbCompModel, "compModel");
+    addKnob(slCompThresh, "compThresh"); setupLabel(lbCompThresh, "THRESHOLD");
+    addKnob(slCompMix, "compMix");       setupLabel(lbCompMix, "MIX");
+    addToggle(btScLink, "scLink");
+    addToggle(btScFilter, "scFilter");
+    addToggle(btParCrush, "parCrush");
+    addKnob(slParBlend, "parBlend");     setupLabel(lbParBlend, "PAR BLEND");
+    addCombo(cbParRoute, "parRoute");
+
+    // Bottom Right: Master
+    addKnob(slOutput, "outputGain"); setupLabel(lbOutput, "OUTPUT");
+
+    startTimerHz(20);
 }
 
-void BenBocazStudioProEditor::resized()
+BenBocazStudioProAudioProcessorEditor::~BenBocazStudioProAudioProcessorEditor()
 {
-    modeLbl.setBounds       (390, 10, 96, 13);  modeBox.setBounds       (390, 25, 100, 25);
-    chainLbl.setBounds      (500, 10, 165, 13); chainBox.setBounds      (500, 25, 176, 25);
-    phaseAlignBtn.setBounds (688, 9,  112, 23);
-    phaseInvBtn.setBounds   (688, 36, 112, 23);
-    vuMeter.setBounds       (812, 6,  312, 56);
-    vuModeBtn.setBounds     (1134, 20, 94, 26);
+    stopTimer();
+    setLookAndFeel(nullptr);
+}
 
-    presetLbl.setBounds     (32,  73, 58,  22);
-    presetBox.setBounds     (92,  73, 250, 22);
-    snapCenterBtn.setBounds (362, 73, 106, 22);
-    link34Btn.setBounds     (476, 73, 86,  22);
-    centerSelBtn.setBounds  (570, 73, 92,  22);
-    tipsBtn.setBounds       (1038, 73, 74,  22);
-    expandStageBtn.setBounds(1120, 73, 110, 22);
-
-    const bool showRacks = ! stageExpanded;
-    for (auto* c : std::initializer_list<juce::Component*> {
-        &vocalModBtn, &vocalSrcLbl, &vocalSrcBox, &vocalTgtLbl, &vocalTgtBox,
-        &vocalInLbl, &vocalInSlider, &vocalOutLbl, &vocalOutSlider,
-        &sourceLbl, &sourceBox, &monitorLbl, &monitorBox, &roomLbl, &roomBox, &wallsLbl, &wallsBox,
-        &eqTubeLbl, &eqTubeBox, &driveLbl, &driveSlider,
-        &chamberOnBtn, &chamberLbl, &chamberBox, &loadIRBtn, &irNameLbl,
-        &chMixLbl, &chMixSlider, &chDecayLbl, &chDecaySlider, &chPreLbl, &chPreSlider, &chWidthLbl, &chWidthSlider,
-        &eqOnBtn, &eqTypeLbl, &eqTypeBox,
-        &eqHpfLbl, &eqHpfSlider, &eqLowLbl, &eqLowSlider, &eqLowFreqBox,
-        &eqMidLbl, &eqMidSlider, &eqMidFreqBox, &eqHighLbl, &eqHighSlider, &eqHighFreqBox,
-        &compOnBtn, &compLbl, &compBox, &compScLinkBtn, &compScFiltBtn,
-        &compThreshLbl, &compThreshSlider, &compMixLbl, &compMixSlider,
-        &parCompOnBtn, &parAmtLbl, &parAmtSlider, &parRouteLbl, &parRouteBox,
-        &outGainLbl, &outGainSlider
-    })
+void BenBocazStudioProAudioProcessorEditor::setupKnob(juce::Slider& s, const juce::String& suffix)
+{
+    s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 64, 18);
+    // Evita el clasico "-0.00" en punto flotante
+    s.textFromValueFunction = [suffix](double v)
     {
-        c->setVisible (showRacks);
-    }
+        if (std::abs(v) < 0.005) v = 0.0;
+        return juce::String(v, 2) + suffix;
+    };
+}
 
-    if (stageExpanded)
+void BenBocazStudioProAudioProcessorEditor::setupLabel(juce::Label& l, const juce::String& text,
+                                                       float fontSize, juce::Justification just)
+{
+    l.setText(text, juce::dontSendNotification);
+    l.setFont(juce::FontOptions(fontSize, juce::Font::bold));
+    l.setColour(juce::Label::textColourId, juce::Colour(0xffc9b296));
+    l.setJustificationType(just);
+    addAndMakeVisible(l);
+}
+
+void BenBocazStudioProAudioProcessorEditor::updateHqButtonText()
+{
+    btHqMode.setButtonText(btHqMode.getToggleState() ? "HQ 4x" : "TRACK 0ms");
+}
+
+void BenBocazStudioProAudioProcessorEditor::timerCallback()
+{
+    vuMeter.setLevelDb(vuGrMode ? processor.vuGrDb.load(std::memory_order_relaxed)
+                                : processor.vuOutDb.load(std::memory_order_relaxed),
+                       vuGrMode);
+    stagePad.repaint();
+}
+
+void BenBocazStudioProAudioProcessorEditor::paint(juce::Graphics& g)
+{
+    if (imgChassisWood.isValid())
+        g.drawImageWithin(imgChassisWood, 0, 0, getWidth(), getHeight(), juce::RectanglePlacement::fillDestination);
+    else
+        g.fillAll(juce::Colour(0xff1a1410));
+
+    // Velo oscuro sutil para legibilidad
+    g.setColour(juce::Colour(0x88120c08));
+    g.fillRect(getLocalBounds());
+
+    // Header
+    g.setColour(juce::Colour(0xd917110d));
+    g.fillRect(0, 0, getWidth(), 102);
+    g.setColour(juce::Colour(0xff5a4634));
+    g.drawHorizontalLine(102, 0.0f, static_cast<float>(getWidth()));
+
+    // Titulo del chasis: LOS ANDES CAPITAL
+    g.setColour(juce::Colour(0xfff5e6d0));
+    g.setFont(juce::FontOptions(24.0f, juce::Font::bold));
+    g.drawText("LOS ANDES CAPITAL", 24, 10, 320, 30, juce::Justification::centredLeft);
+
+    g.setColour(juce::Colour(0xffc99a5b));
+    g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
+    g.drawText("VOLCANO HALL  |  3D 4-STAND RE-MIC  |  ANALOG CONSOLE", 24, 40, 360, 16, juce::Justification::centredLeft);
+}
+
+void BenBocazStudioProAudioProcessorEditor::resized()
+{
+    // Top Row 1
+    cbMode.setBounds(370, 22, 105, 26);
+    cbRouting.setBounds(485, 22, 185, 26);
+    btHqMode.setBounds(680, 10, 115, 22);
+    btPhaseSafe.setBounds(680, 36, 115, 22);
+    btPolarity.setBounds(805, 36, 115, 22);
+    vuMeter.setBounds(930, 8, 210, 48);
+    btVuMode.setBounds(1150, 14, 92, 34);
+
+    // Top Row 2 (Presets & Stage tools, sin boton i TIPS)
+    cbPresets.setBounds(24, 68, 285, 24);
+    btSnapCenter.setBounds(322, 68, 115, 24);
+    btLink34.setBounds(446, 68, 98, 24);
+    btCenterMic.setBounds(554, 68, 105, 24);
+    btExpandStage.setBounds(1110, 68, 132, 24);
+
+    const bool showRacks = !expandedStage;
+    auto setRacksVisible = [&](bool v)
     {
-        mainStereoBtn.setBounds (1016, 113, 114, 20);
-        roomOnBtn.setBounds     (1138, 113, 86,  20);
-        roomPad.setBounds       (36,   138, 1188, 534);
+        btVocalMod.setVisible(v); cbVocalIn.setVisible(v); cbVocalTarget.setVisible(v);
+        slVocalIn.setVisible(v); slVocalOut.setVisible(v); lbVocalIn.setVisible(v); lbVocalOut.setVisible(v);
+        cbSource.setVisible(v); cbMonitor.setVisible(v); cbRoom.setVisible(v); cbWalls.setVisible(v);
+        cbCircuit.setVisible(v); slDrive.setVisible(v); lbDrive.setVisible(v);
 
-        const int yBtn = 678, yKnb = 698;
-        mic1SelBtn.setBounds (130, yBtn, 76, 17); mic1GainSlider.setBounds (134, yKnb, 68, 68); solo1Btn.setBounds (204, yKnb + 18, 22, 22);
-        mic2SelBtn.setBounds (310, yBtn, 76, 17); mic2GainSlider.setBounds (314, yKnb, 68, 68); solo2Btn.setBounds (384, yKnb + 18, 22, 22);
-        mic3SelBtn.setBounds (490, yBtn, 76, 17); mic3GainSlider.setBounds (494, yKnb, 68, 68); solo3Btn.setBounds (564, yKnb + 18, 22, 22);
-        mic4SelBtn.setBounds (670, yBtn, 76, 17); mic4GainSlider.setBounds (674, yKnb, 68, 68); solo4Btn.setBounds (744, yKnb + 18, 22, 22);
-        pairWidthLbl.setBounds  (840, yBtn + 2, 96, 13); pairWidthSlider.setBounds  (854, yKnb, 68, 68);
-        deccaWidthLbl.setBounds (1010,yBtn + 2, 96, 13); deccaWidthSlider.setBounds (1024,yKnb, 68, 68);
+        btChamberOn.setVisible(v); cbChamberModel.setVisible(v);
+        slChamberSend.setVisible(v); slChamberDecay.setVisible(v); slChamberPre.setVisible(v); slChamberWidth.setVisible(v);
+        lbChSend.setVisible(v); lbChDecay.setVisible(v); lbChPre.setVisible(v); lbChWidth.setVisible(v);
+
+        btEqOn.setVisible(v); cbEqModel.setVisible(v);
+        slHpf.setVisible(v); slLowGain.setVisible(v); slMidGain.setVisible(v); slHighGain.setVisible(v);
+        lbHpf.setVisible(v); lbLow.setVisible(v); lbMid.setVisible(v); lbHigh.setVisible(v);
+        cbLowFreq.setVisible(v); cbMidFreq.setVisible(v); cbHighFreq.setVisible(v);
+
+        btCompOn.setVisible(v); cbCompModel.setVisible(v);
+        slCompThresh.setVisible(v); slCompMix.setVisible(v); lbCompThresh.setVisible(v); lbCompMix.setVisible(v);
+        btScLink.setVisible(v); btScFilter.setVisible(v); btParCrush.setVisible(v);
+        slParBlend.setVisible(v); lbParBlend.setVisible(v); cbParRoute.setVisible(v);
+
+        slOutput.setVisible(v); lbOutput.setVisible(v);
+    };
+    setRacksVisible(showRacks);
+
+    if (expandedStage)
+    {
+        btMainStereo.setBounds(990, 114, 120, 22);
+        btRoomOn.setBounds(1120, 114, 110, 22);
+        stagePad.setBounds(30, 144, 1200, 520);
+
+        const int stripY = 678;
+        for (int i = 0; i < 4; ++i)
+        {
+            const int x = 60 + i * 195;
+            btMicSelect[i].setBounds(x, stripY, 105, 20);
+            slMicGain[i].setBounds(x + 12, stripY + 22, 82, 78);
+            btMicSolo[i].setBounds(x + 100, stripY + 42, 34, 22);
+        }
+        lbPairWide.setBounds(865, stripY, 100, 18);
+        slPairWide.setBounds(875, stripY + 20, 82, 78);
+        lbFarWide.setBounds(1015, stripY, 100, 18);
+        slFarWide.setBounds(1025, stripY + 20, 82, 78);
         return;
     }
 
-    vocalModBtn.setBounds    (36,  132, 232, 22);
-    vocalSrcLbl.setBounds    (36,  158, 112, 12); vocalSrcBox.setBounds    (36,  171, 112, 22);
-    vocalTgtLbl.setBounds    (156, 158, 112, 12); vocalTgtBox.setBounds    (156, 171, 112, 22);
-    vocalInLbl.setBounds     (46,  198, 92,  12); vocalInSlider.setBounds  (56,  211, 70,  68);
-    vocalOutLbl.setBounds    (166, 198, 92,  12); vocalOutSlider.setBounds (176, 211, 70,  68);
+    // Vista normal completa (1260 x 790)
+    // Left Rack (24 .. 288)
+    btVocalMod.setBounds(28, 120, 250, 24);
+    cbVocalIn.setBounds(28, 152, 120, 24);
+    cbVocalTarget.setBounds(158, 152, 120, 24);
+    lbVocalIn.setBounds(34, 184, 100, 16);   slVocalIn.setBounds(42, 200, 84, 78);
+    lbVocalOut.setBounds(164, 184, 100, 16); slVocalOut.setBounds(172, 200, 84, 78);
 
-    sourceLbl.setBounds   (36,  294, 112, 12); sourceBox.setBounds   (36,  307, 112, 22);
-    monitorLbl.setBounds  (156, 294, 112, 12); monitorBox.setBounds  (156, 307, 112, 22);
-    roomLbl.setBounds     (36,  337, 112, 12); roomBox.setBounds     (36,  350, 112, 22);
-    wallsLbl.setBounds    (156, 337, 112, 12); wallsBox.setBounds    (156, 350, 112, 22);
+    cbSource.setBounds(28, 294, 120, 24);
+    cbMonitor.setBounds(158, 294, 120, 24);
+    cbRoom.setBounds(28, 330, 120, 24);
+    cbWalls.setBounds(158, 330, 120, 24);
 
-    eqTubeLbl.setBounds   (54,  402, 196, 12); eqTubeBox.setBounds   (54,  415, 196, 22);
-    driveLbl.setBounds    (85,  444, 134, 12); driveSlider.setBounds (114, 458, 76,  86);
+    cbCircuit.setBounds(28, 386, 250, 24);
+    lbDrive.setBounds(28, 420, 250, 16);
+    slDrive.setBounds(110, 440, 86, 82);
 
-    mainStereoBtn.setBounds (728, 113, 114, 20);
-    roomOnBtn.setBounds     (850, 113, 86,  20);
-    roomPad.setBounds       (304, 136, 632, 326);
+    // Center Stage (304 .. 956)
+    btMainStereo.setBounds(726, 114, 112, 22);
+    btRoomOn.setBounds(846, 114, 106, 22);
+    stagePad.setBounds(304, 142, 650, 300);
 
-    mic1SelBtn.setBounds (308, 467, 72, 16); mic1GainSlider.setBounds (310, 484, 68, 66); solo1Btn.setBounds (379, 501, 20, 20);
-    mic2SelBtn.setBounds (414, 467, 72, 16); mic2GainSlider.setBounds (416, 484, 68, 66); solo2Btn.setBounds (485, 501, 20, 20);
-    mic3SelBtn.setBounds (520, 467, 72, 16); mic3GainSlider.setBounds (522, 484, 68, 66); solo3Btn.setBounds (591, 501, 20, 20);
-    mic4SelBtn.setBounds (626, 467, 72, 16); mic4GainSlider.setBounds (628, 484, 68, 66); solo4Btn.setBounds (697, 501, 20, 20);
-    pairWidthLbl.setBounds  (728, 469, 98, 13); pairWidthSlider.setBounds  (742, 484, 68, 66);
-    deccaWidthLbl.setBounds (834, 469, 98, 13); deccaWidthSlider.setBounds (848, 484, 68, 66);
+    const int micY = 450;
+    for (int i = 0; i < 4; ++i)
+    {
+        const int x = 308 + i * 112;
+        btMicSelect[i].setBounds(x, micY, 88, 20);
+        slMicGain[i].setBounds(x + 4, micY + 22, 76, 74);
+        btMicSolo[i].setBounds(x + 82, micY + 42, 24, 22);
+    }
+    lbPairWide.setBounds(762, micY, 86, 18); slPairWide.setBounds(768, micY + 20, 76, 74);
+    lbFarWide.setBounds(862, micY, 86, 18);  slFarWide.setBounds(868, micY + 20, 76, 74);
 
-    chamberOnBtn.setBounds (1154, 113, 70, 20);
-    chamberLbl.setBounds   (972, 140, 160, 13); chamberBox.setBounds (972, 154, 252, 24);
-    loadIRBtn.setBounds    (972, 186, 114, 24); irNameLbl.setBounds  (1092, 186, 132, 24);
+    // Right Rack: Echo Chambers (972 .. 1236)
+    btChamberOn.setBounds(1164, 114, 72, 22);
+    cbChamberModel.setBounds(976, 146, 260, 26);
+    lbChSend.setBounds(986, 204, 100, 16);  slChamberSend.setBounds(994, 222, 86, 82);
+    lbChDecay.setBounds(1126, 204, 100, 16); slChamberDecay.setBounds(1134, 222, 86, 82);
+    lbChPre.setBounds(986, 344, 100, 16);   slChamberPre.setBounds(994, 362, 86, 82);
+    lbChWidth.setBounds(1126, 344, 100, 16); slChamberWidth.setBounds(1134, 362, 86, 82);
 
-    chMixLbl.setBounds   (990,  238, 96, 13); chMixSlider.setBounds   (998,  253, 80, 88);
-    chDecayLbl.setBounds (1110, 238, 96, 13); chDecaySlider.setBounds (1118, 253, 80, 88);
-    chPreLbl.setBounds   (990,  384, 96, 13); chPreSlider.setBounds   (998,  399, 80, 88);
-    chWidthLbl.setBounds (1110, 384, 96, 13); chWidthSlider.setBounds (1118, 399, 80, 88);
+    // Bottom Left: Console EQ (24 .. 596)
+    btEqOn.setBounds(508, 566, 82, 22);
+    cbEqModel.setBounds(30, 566, 220, 24);
+    lbHpf.setBounds(40, 606, 86, 16);  slHpf.setBounds(40, 624, 86, 82);
+    lbLow.setBounds(174, 606, 86, 16); slLowGain.setBounds(174, 624, 86, 82); cbLowFreq.setBounds(172, 716, 90, 24);
+    lbMid.setBounds(316, 606, 86, 16); slMidGain.setBounds(316, 624, 86, 82); cbMidFreq.setBounds(314, 716, 90, 24);
+    lbHigh.setBounds(458, 606, 86, 16); slHighGain.setBounds(458, 624, 86, 82); cbHighFreq.setBounds(456, 716, 90, 24);
 
-    eqOnBtn.setBounds       (516, 573, 72, 21);
-    eqTypeLbl.setBounds     (38,  596, 80, 12); eqTypeBox.setBounds (124, 594, 210, 21);
+    // Bottom Mid: Comp & Parallel (614 .. 1094)
+    btCompOn.setBounds(1002, 566, 88, 22);
+    cbCompModel.setBounds(620, 566, 165, 24);
+    btScLink.setBounds(796, 566, 94, 22);
+    btScFilter.setBounds(796, 594, 94, 22);
 
-    eqHpfLbl.setBounds  (48,  628, 86, 13); eqHpfSlider.setBounds  (54,  642, 74, 82);
-    eqLowLbl.setBounds  (184, 628, 86, 13); eqLowSlider.setBounds  (190, 642, 74, 82); eqLowFreqBox.setBounds  (187, 738, 80, 20);
-    eqMidLbl.setBounds  (320, 628, 86, 13); eqMidSlider.setBounds  (326, 642, 74, 82); eqMidFreqBox.setBounds  (323, 738, 80, 20);
-    eqHighLbl.setBounds (456, 628, 86, 13); eqHighSlider.setBounds (462, 642, 74, 82); eqHighFreqBox.setBounds (459, 738, 80, 20);
+    lbCompThresh.setBounds(624, 614, 90, 16); slCompThresh.setBounds(626, 632, 86, 82);
+    lbCompMix.setBounds(748, 614, 90, 16);    slCompMix.setBounds(750, 632, 86, 82);
 
-    compOnBtn.setBounds     (998, 573, 78, 21);
-    compLbl.setBounds       (626, 595, 140, 12); compBox.setBounds       (626, 608, 152, 21);
-    compScLinkBtn.setBounds (786, 595, 114, 19);
-    compScFiltBtn.setBounds (786, 617, 114, 19);
+    btParCrush.setBounds(918, 594, 110, 22);
+    lbParBlend.setBounds(924, 622, 96, 16);
+    slParBlend.setBounds(930, 638, 82, 76);
+    cbParRoute.setBounds(914, 718, 126, 24);
 
-    compThreshLbl.setBounds (632, 648, 86, 13); compThreshSlider.setBounds (638, 662, 74, 84);
-    compMixLbl.setBounds    (762, 648, 86, 13); compMixSlider.setBounds    (768, 662, 74, 84);
-
-    parCompOnBtn.setBounds  (930, 598, 144, 20);
-    parAmtLbl.setBounds     (958, 624, 88,  12); parAmtSlider.setBounds (966, 637, 72, 78);
-    parRouteLbl.setBounds   (934, 722, 136, 12); parRouteBox.setBounds  (934, 735, 136, 21);
-
-    outGainLbl.setBounds    (1124, 636, 88, 13); outGainSlider.setBounds (1130, 650, 76, 94);
+    // Bottom Right: Master (1110 .. 1236)
+    lbOutput.setBounds(1130, 608, 90, 16);
+    slOutput.setBounds(1132, 628, 88, 86);
 }

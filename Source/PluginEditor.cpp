@@ -310,9 +310,9 @@ juce::Point<float> Studio4MicStagePad::getStandBasePos (int idx, juce::Rectangle
     const float my = apvts.getRawParameterValue (pfx + "Y")->load();
     const int roomIdx = std::clamp (static_cast<int> (apvts.getRawParameterValue ("room")->load()), 0, 2);
 
-    const float yTopRatio = (roomIdx == 2) ? 0.61f : 0.75f;
+    const float yTopRatio = (roomIdx == 2) ? 0.65f : 0.75f;
     const float yBotPad   = (roomIdx == 2) ? 12.0f : 14.0f;
-    const float backHalfW = (roomIdx == 2) ? 0.17f : 0.30f;
+    const float backHalfW = (roomIdx == 2) ? 0.18f : 0.30f;
     const float frontHalfW = 0.43f;
 
     const float yTop  = area.getY() + area.getHeight() * yTopRatio;
@@ -327,14 +327,15 @@ float Studio4MicStagePad::getStandScale (int idx) const
 {
     const float my = apvts.getRawParameterValue ("mic" + juce::String (idx + 1) + "Y")->load();
     const int roomIdx = std::clamp (static_cast<int> (apvts.getRawParameterValue ("room")->load()), 0, 2);
-    const float minScale = (roomIdx == 2) ? 0.62f : 0.78f;
+    const float minScale = (roomIdx == 2) ? 0.64f : 0.78f;
     const float maxScale = (roomIdx == 2) ? 1.18f : 1.20f;
     return juce::jmap (my, 0.0f, 1.0f, minScale, maxScale);
 }
 
 float Studio4MicStagePad::getStandVisualHeight (int idx, float scale) const
 {
-    static constexpr std::array<float, 4> baseHeights { 116.0f, 146.0f, 134.0f, 134.0f };
+    // FAR L y FAR R más altos (estilo atriles de ambiente altos)
+    static constexpr std::array<float, 4> baseHeights { 116.0f, 146.0f, 152.0f, 152.0f };
     const float baseH = baseHeights[static_cast<size_t> (std::clamp (idx, 0, 3))];
 
     const float padFactor = std::clamp (static_cast<float> (getHeight()) / 360.0f, 0.88f, 1.48f);
@@ -568,16 +569,17 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     const bool isCanyon  = (roomIdx == 1);
     const bool isVolcano = (roomIdx == 2);
 
+    // En Volcano (Open y Closed) las fuentes descansan sobre la alfombra del fondo sin flotar
     float floorRatio = 0.70f;
     if (isCanyon)
         floorRatio = isCabinetSource ? 0.725f : 0.735f;
     else if (isVolcano)
-        floorRatio = isCabinetSource ? 0.580f : 0.590f;
+        floorRatio = isCabinetSource ? 0.635f : 0.645f;
     else
         floorRatio = isCabinetSource ? 0.690f : 0.700f;
 
     const float srcFloorY = area.getY() + area.getHeight() * floorRatio;
-    const float roomScale = isCanyon ? 0.88f : (isVolcano ? 0.66f : 1.04f);
+    const float roomScale = isCanyon ? 0.88f : (isVolcano ? 0.68f : 1.04f);
 
     g.setColour (juce::Colours::black.withAlpha (0.48f * stageAlpha));
     g.fillEllipse (srcFloorX - 66.0f * roomScale, srcFloorY - 7.0f, 132.0f * roomScale, 16.0f);
@@ -649,7 +651,7 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
         juce::Colour (0xfff5ebd6)
     };
 
-    const float roomD = (roomIdx == 0) ? 12.5f : ((roomIdx == 1) ? 8.5f : 16.0f);
+    const float roomD = (roomIdx == 0) ? 12.5f : ((roomIdx == 1) ? 8.5f : 20.0f);
     const int soloIdx = processor.getSoloStand();
 
     for (int idx : order)
@@ -773,7 +775,7 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
 
     g.setColour (juce::Colour (0xfff4d08c).withAlpha (roomIsOn ? 1.0f : 0.55f));
     g.setFont (juce::Font (juce::FontOptions (9.8f).withStyle ("Bold")));
-    juce::String roomTitle = (roomIdx == 0 ? "STUDIO A (SHANGRI-LA)" : ((roomIdx == 1) ? "STUDIO B (CANYON)" : "VOLCANO"));
+    juce::String roomTitle = (roomIdx == 0 ? "STUDIO A (SHANGRI-LA)" : ((roomIdx == 1) ? "STUDIO B (CANYON)" : "VOLCANO (20m)"));
     roomTitle += (wallsLive ? "  |  LIVE WOOD" : "  |  TIGHT");
     g.drawText (roomTitle, topBar, juce::Justification::centredLeft);
 
@@ -859,9 +861,9 @@ void Studio4MicStagePad::mouseUp (const juce::MouseEvent& e)
 void Studio4MicStagePad::updateStandFromBasePoint (int idx, juce::Point<float> targetBase, juce::Rectangle<float> area)
 {
     const int roomIdx = std::clamp (static_cast<int> (apvts.getRawParameterValue ("room")->load()), 0, 2);
-    const float yTopRatio = (roomIdx == 2) ? 0.61f : 0.75f;
+    const float yTopRatio = (roomIdx == 2) ? 0.65f : 0.75f;
     const float yBotPad   = (roomIdx == 2) ? 12.0f : 14.0f;
-    const float backHalfW = (roomIdx == 2) ? 0.17f : 0.30f;
+    const float backHalfW = (roomIdx == 2) ? 0.18f : 0.30f;
     const float frontHalfW = 0.43f;
 
     const float yTop = area.getY() + area.getHeight() * yTopRatio;
@@ -930,6 +932,9 @@ BenBocazStudioProEditor::BenBocazStudioProEditor (BenBocazStudioProProcessor& p)
 
     centerSelBtn.onClick = [this] { roomPad.centerStand (roomPad.getSelectedStand()); };
     addAndMakeVisible (centerSelBtn);
+
+    hqModeBtn.onClick = [this] { updateHqModeButtonText(); };
+    addAndMakeVisible (hqModeBtn);
 
     tipsBtn.setClickingTogglesState (true);
     tipsBtn.onClick = [this] { roomPad.setShowTipsOverlay (tipsBtn.getToggleState()); };
@@ -1063,6 +1068,7 @@ BenBocazStudioProEditor::BenBocazStudioProEditor (BenBocazStudioProProcessor& p)
     auto& v = audioProcessor.apvts;
     phaseAlignAtt = std::make_unique<ButtonAtt> (v, "phaseAlign", phaseAlignBtn);
     phaseInvAtt   = std::make_unique<ButtonAtt> (v, "phaseInvert", phaseInvBtn);
+    hqModeAtt     = std::make_unique<ButtonAtt> (v, "hqMode", hqModeBtn);
     vocalModAtt   = std::make_unique<ButtonAtt> (v, "vocalModOn", vocalModBtn);
     mainStereoAtt = std::make_unique<ButtonAtt> (v, "mainStereo", mainStereoBtn);
     roomOnAtt     = std::make_unique<ButtonAtt> (v, "roomOn", roomOnBtn);
@@ -1072,6 +1078,7 @@ BenBocazStudioProEditor::BenBocazStudioProEditor (BenBocazStudioProProcessor& p)
     compScLinkAtt = std::make_unique<ButtonAtt> (v, "compScLink", compScLinkBtn);
     compScFiltAtt = std::make_unique<ButtonAtt> (v, "compScFilter", compScFiltBtn);
     parCompOnAtt  = std::make_unique<ButtonAtt> (v, "parCompOn", parCompOnBtn);
+    updateHqModeButtonText();
 
     modeAtt       = std::make_unique<ComboAtt> (v, "mode", modeBox);
     chainAtt      = std::make_unique<ComboAtt> (v, "chainOrder", chainBox);
@@ -1124,6 +1131,11 @@ BenBocazStudioProEditor::BenBocazStudioProEditor (BenBocazStudioProProcessor& p)
 
 BenBocazStudioProEditor::~BenBocazStudioProEditor() { setLookAndFeel (nullptr); }
 
+void BenBocazStudioProEditor::updateHqModeButtonText()
+{
+    hqModeBtn.setButtonText (hqModeBtn.getToggleState() ? "MIXING 4x HQ" : "TRACKING 0ms");
+}
+
 void BenBocazStudioProEditor::updateSoloButtonsUI()
 {
     const int s = audioProcessor.getSoloStand();
@@ -1153,8 +1165,9 @@ void BenBocazStudioProEditor::applyFactoryPreset (int idx)
     {
         setParam ("mode", 1); setParam ("source", 0); setParam ("roomOn", 1); setParam ("mainStereo", 0);
         setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.16f); setParam ("mic1Gain", 1.0f);
-        setParam ("mic2X", -0.38f); setParam ("mic2Y", 0.48f); setParam ("mic2Gain", 0.25f);
-        setParam ("mic3Gain", 0.0f); setParam ("mic4Gain", 0.0f);
+        setParam ("mic2X", -0.32f); setParam ("mic2Y", 0.48f); setParam ("mic2Gain", 0.25f);
+        setParam ("mic3X", -0.52f); setParam ("mic3Y", 0.78f); setParam ("mic3Gain", 0.0f);
+        setParam ("mic4X",  0.52f); setParam ("mic4Y", 0.78f); setParam ("mic4Gain", 0.0f);
         setParam ("chamberMix", 0.16f); setParam ("eqLow", 0.0f); setParam ("eqMid", 0.0f); setParam ("eqHigh", 0.0f);
         setParam ("parCompOn", 0);
     }
@@ -1163,7 +1176,8 @@ void BenBocazStudioProEditor::applyFactoryPreset (int idx)
         setParam ("mode", 1); setParam ("source", 0); setParam ("room", 0); setParam ("walls", 1);
         setParam ("vocalModOn", 1); setParam ("vocalSrcMic", 2); setParam ("vocalTgtMic", 0);
         setParam ("mainStereo", 0); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.16f);
-        setParam ("mic1Gain", 1.05f); setParam ("mic2Gain", 0.25f); setParam ("mic3Gain", 0.30f); setParam ("mic4Gain", 0.0f);
+        setParam ("mic1Gain", 1.05f); setParam ("mic2Gain", 0.25f);
+        setParam ("mic3X", -0.52f); setParam ("mic4X", 0.52f); setParam ("mic3Gain", 0.22f); setParam ("mic4Gain", 0.22f);
         setParam ("eqType", 1); setParam ("eqHighFreq", 2); setParam ("eqHigh", 2.0f);
         setParam ("compType", 1); setParam ("compMix", 0.85f); setParam ("chamberMix", 0.22f);
     }
@@ -1171,7 +1185,8 @@ void BenBocazStudioProEditor::applyFactoryPreset (int idx)
     {
         setParam ("mode", 1); setParam ("source", 1); setParam ("room", 0); setParam ("walls", 1);
         setParam ("mainStereo", 1); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.24f);
-        setParam ("mic1Gain", 0.95f); setParam ("mic2Gain", 0.65f); setParam ("mic3Gain", 0.55f); setParam ("mic4Gain", 0.50f);
+        setParam ("mic1Gain", 0.95f); setParam ("mic2Gain", 0.65f);
+        setParam ("mic3X", -0.62f); setParam ("mic4X", 0.62f); setParam ("mic3Gain", 0.55f); setParam ("mic4Gain", 0.55f);
         setParam ("pairSpread", 1.15f); setParam ("deccaWidth", 1.20f);
         setParam ("eqType", 2); setParam ("parCompOn", 1); setParam ("parCompRoute", 1); setParam ("parCompAmt", 0.55f);
     }
@@ -1179,14 +1194,16 @@ void BenBocazStudioProEditor::applyFactoryPreset (int idx)
     {
         setParam ("mode", 1); setParam ("source", 5); setParam ("room", 1); setParam ("walls", 1);
         setParam ("mainStereo", 1); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.20f);
-        setParam ("mic1Gain", 1.0f); setParam ("mic2Gain", 0.50f); setParam ("mic3Gain", 0.45f); setParam ("mic4Gain", 0.30f);
+        setParam ("mic1Gain", 1.0f); setParam ("mic2Gain", 0.50f);
+        setParam ("mic3X", -0.55f); setParam ("mic4X", 0.55f); setParam ("mic3Gain", 0.35f); setParam ("mic4Gain", 0.35f);
         setParam ("eqType", 0); setParam ("eqMidFreq", 2); setParam ("eqMid", 1.8f);
     }
     else if (idx == 4)
     {
         setParam ("mode", 1); setParam ("source", 6); setParam ("room", 1); setParam ("walls", 0);
         setParam ("mainStereo", 0); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.14f);
-        setParam ("mic1Gain", 1.10f); setParam ("mic2Gain", 0.32f); setParam ("mic3Gain", 0.0f); setParam ("mic4Gain", 0.22f);
+        setParam ("mic1Gain", 1.10f); setParam ("mic2Gain", 0.32f);
+        setParam ("mic3X", -0.45f); setParam ("mic4X", 0.45f); setParam ("mic3Gain", 0.0f); setParam ("mic4Gain", 0.0f);
         setParam ("eqType", 0); setParam ("eqLowFreq", 1); setParam ("eqLow", 2.5f);
         setParam ("compType", 0); setParam ("compScFilter", 1);
     }
@@ -1194,7 +1211,8 @@ void BenBocazStudioProEditor::applyFactoryPreset (int idx)
     {
         setParam ("mode", 1); setParam ("source", 3); setParam ("monitorType", 1); setParam ("room", 0);
         setParam ("mainStereo", 1); setParam ("mic1Gain", 0.85f); setParam ("mic2Gain", 0.55f);
-        setParam ("mic3Gain", 0.45f); setParam ("mic4Gain", 0.0f); setParam ("consoleDrive", 0.32f);
+        setParam ("mic3X", -0.55f); setParam ("mic4X", 0.55f); setParam ("mic3Gain", 0.35f); setParam ("mic4Gain", 0.35f);
+        setParam ("consoleDrive", 0.32f);
     }
 }
 
@@ -1417,6 +1435,7 @@ void BenBocazStudioProEditor::resized()
     snapCenterBtn.setBounds (362, 73, 106, 22);
     link34Btn.setBounds     (476, 73, 86,  22);
     centerSelBtn.setBounds  (570, 73, 92,  22);
+    hqModeBtn.setBounds     (896, 73, 132, 22);
     tipsBtn.setBounds       (1038, 73, 74,  22);
     expandStageBtn.setBounds(1120, 73, 110, 22);
 

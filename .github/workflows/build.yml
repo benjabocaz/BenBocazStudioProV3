@@ -30,6 +30,8 @@ jobs:
         run: |
           mkdir -p artifacts
           find build -name "*.component" -exec cp -R {} artifacts/ \;
+          find artifacts -name "*.component" -exec xattr -cr {} \;
+          find artifacts -name "*.component" -exec codesign --force --deep --sign - {} \;
 
       - name: Upload AU artifact
         uses: actions/upload-artifact@v4

@@ -93,8 +93,12 @@ void AnalogVUMeter::setLevelDb(float db, bool isGainReduction)
     else
         norm = std::clamp((db + 36.0f) / 39.0f, 0.0f, 1.0f);
 
-    smoothedNeedle = smoothedNeedle * 0.72f + norm * 0.28f;
-    repaint();
+    const float next = smoothedNeedle * 0.72f + norm * 0.28f;
+    if (std::abs(next - smoothedNeedle) > 0.0005f)
+    {
+        smoothedNeedle = next;
+        repaint();
+    }
 }
 
 void AnalogVUMeter::paint(juce::Graphics& g)
@@ -237,8 +241,8 @@ void Studio4MicStagePad::setMicPos(int idx, float nx, float ny)
     static constexpr const char* xIds[4] = { "mic1X", "mic2X", "mic3X", "mic4X" };
     static constexpr const char* yIds[4] = { "mic1Y", "mic2Y", "mic3Y", "mic4Y" };
 
-    if (auto* px = apvts.getParameter(xIds[idx])) px->setValueNotifyingHost(px->convertTo0to1(nx));
-    if (auto* py = apvts.getParameter(yIds[idx])) py->setValueNotifyingHost(py->convertTo0to1(ny));
+    if (auto* px = apvts.getParameter(xIds[idx])) px->setValue(px->convertTo0to1(nx));
+    if (auto* py = apvts.getParameter(yIds[idx])) py->setValue(py->convertTo0to1(ny));
 }
 
 void Studio4MicStagePad::paint(juce::Graphics& g)
@@ -363,13 +367,15 @@ void Studio4MicStagePad::mouseDown(const juce::MouseEvent& e)
     static constexpr const char* xIds[4] = { "mic1X", "mic2X", "mic3X", "mic4X" };
     static constexpr const char* yIds[4] = { "mic1Y", "mic2Y", "mic3Y", "mic4Y" };
 
-    float bestDist = 48.0f;
+    float bestDist = std::max(44.0f, area.getHeight() * 0.14f);
     int bestIdx = -1;
     for (int i = 0; i < 4; ++i)
     {
-        const auto p = normToScreen(apvts.getRawParameterValue(xIds[i])->load(),
-                                    apvts.getRawParameterValue(yIds[i])->load(), area);
-        const float d = e.position.getDistanceFrom(p.translated(0.0f, -24.0f));
+        const float nx = apvts.getRawParameterValue(xIds[i])->load();
+        const float ny = apvts.getRawParameterValue(yIds[i])->load();
+        const auto p = normToScreen(nx, ny, area);
+        const float micH = area.getHeight() * (0.24f + 0.26f * ny);
+        const float d = e.position.getDistanceFrom(p.translated(0.0f, -micH * 0.45f));
         if (d < bestDist)
         {
             bestDist = d;
@@ -611,7 +617,9 @@ void BenBocazStudioProAudioProcessorEditor::timerCallback()
     vuMeter.setLevelDb(vuGrMode ? processor.vuGrDb.load(std::memory_order_relaxed)
                                 : processor.vuOutDb.load(std::memory_order_relaxed),
                        vuGrMode);
-    stagePad.repaint();
+
+    if (draggingAny())
+        stagePad.repaint();
 }
 
 void BenBocazStudioProAudioProcessorEditor::paint(juce::Graphics& g)

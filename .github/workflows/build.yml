@@ -1,4 +1,4 @@
-name: Build macOS Plugin
+name: Build macOS AU Plugin
 
 on:
   push:
@@ -22,18 +22,17 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="11.0"
 
-      - name: Build AU and VST3 targets
+      - name: Build AU target
         run: |
-          cmake --build build --config Release --target BenBocazStudioPro_AU BenBocazStudioPro_VST3
+          cmake --build build --config Release --target BenBocazStudioPro_AU
 
-      - name: Package artifacts
+      - name: Package AU artifact
         run: |
           mkdir -p artifacts
           find build -name "*.component" -exec cp -R {} artifacts/ \;
-          find build -name "*.vst3" -exec cp -R {} artifacts/ \;
 
-      - name: Upload plugin artifact
+      - name: Upload AU artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Los-Andes-Capital-${{ github.ref_name }}-arm64
+          name: Los-Andes-Capital-AU-${{ github.ref_name }}-arm64
           path: artifacts/

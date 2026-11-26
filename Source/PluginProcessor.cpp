@@ -29,7 +29,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProAudioProces
     p.push_back(std::make_unique<juce::AudioParameterFloat>("vocalInGain", "Mic In", juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>("vocalOutGain", "Mic Out", juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
 
-    p.push_back(std::make_unique<juce::AudioParameterChoice>("source", "Room Source", juce::StringArray{ "Vocals", "Drums", "Bass Amp", "Guitar Cab", "Ensemble", "Monitors" }, 0));
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("source", "Room Source",
+        juce::StringArray{ "Vocals", "Drums", "Bass Amp", "Guitar Cab Mono", "Guitar Cab Stereo", "Ensemble", "Monitors" }, 0));
     p.push_back(std::make_unique<juce::AudioParameterChoice>("monitorSpeaker", "Monitor Speaker", juce::StringArray{ "Altec Main", "NS-10M", "Auratone" }, 0));
     p.push_back(std::make_unique<juce::AudioParameterChoice>("room", "Studio Room", juce::StringArray{ "Volcano Hall", "Shangri-La", "Canyon Room" }, 0));
     p.push_back(std::make_unique<juce::AudioParameterChoice>("walls", "Room Walls", juce::StringArray{ "Gates Open", "Gates Closed" }, 1));
@@ -94,6 +95,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProAudioProces
 void BenBocazStudioProAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     vocalModeler.prepare(sampleRate);
+    sourceModeler.prepare(sampleRate);
     consoleChain.prepare(sampleRate, samplesPerBlock);
     acousticEngine.prepare(sampleRate, samplesPerBlock);
     parallelComp.prepare(sampleRate, samplesPerBlock);
@@ -112,6 +114,7 @@ void BenBocazStudioProAudioProcessor::prepareToPlay(double sampleRate, int sampl
 void BenBocazStudioProAudioProcessor::releaseResources()
 {
     vocalModeler.reset();
+    sourceModeler.reset();
     consoleChain.reset();
     acousticEngine.reset();
     parallelComp.reset();
@@ -146,15 +149,21 @@ void BenBocazStudioProAudioProcessor::processBlock(juce::AudioBuffer<float>& buf
                                getVal("vocalOutGain"));
     vocalModeler.processEQ(buffer);
 
+    const bool isReMic = (static_cast<int>(getVal("mode")) == 0);
+    const bool roomActive = isReMic && (getVal("roomOn") > 0.5f);
+
+    sourceModeler.setParameters(static_cast<int>(getVal("source")),
+                                static_cast<int>(getVal("monitorSpeaker")));
+    sourceModeler.process(buffer, roomActive);
+
     std::array<BenBocazDSP::MicState, 4> mics;
     mics[0] = { getVal("mic1X"), getVal("mic1Y"), getVal("mic1Gain"), getVal("mic1Solo") > 0.5f };
     mics[1] = { getVal("mic2X"), getVal("mic2Y"), getVal("mic2Gain"), getVal("mic2Solo") > 0.5f };
     mics[2] = { getVal("mic3X"), getVal("mic3Y"), getVal("mic3Gain"), getVal("mic3Solo") > 0.5f };
     mics[3] = { getVal("mic4X"), getVal("mic4Y"), getVal("mic4Gain"), getVal("mic4Solo") > 0.5f };
 
-    const bool isReMic = (static_cast<int>(getVal("mode")) == 0);
     acousticEngine.processRoom(buffer, roomOnlyBuffer,
-                               isReMic && (getVal("roomOn") > 0.5f),
+                               roomActive,
                                static_cast<int>(getVal("room")),
                                static_cast<int>(getVal("walls")),
                                getVal("mainStereo") > 0.5f,
@@ -285,7 +294,7 @@ void BenBocazStudioProAudioProcessor::applyFactoryPreset(int presetIndex)
             setP("chamberSend", 0.12f); setP("compThresh", -18.0f);
             break;
         case 2:
-            setP("room", 0.0f); setP("walls", 0.0f); setP("source", 4.0f); setP("mainStereo", 1.0f);
+            setP("room", 0.0f); setP("walls", 0.0f); setP("source", 5.0f); setP("mainStereo", 1.0f);
             setP("mic1Gain", 0.90f); setP("mic2Gain", 0.48f); setP("mic3Gain", 0.68f); setP("mic4Gain", 0.68f);
             setP("mic1X", 0.50f); setP("mic1Y", 0.24f); setP("mic2X", 0.50f); setP("mic2Y", 0.55f);
             setP("mic3X", 0.08f); setP("mic3Y", 0.92f); setP("mic4X", 0.92f); setP("mic4Y", 0.92f);
@@ -300,7 +309,7 @@ void BenBocazStudioProAudioProcessor::applyFactoryPreset(int presetIndex)
             setP("compModel", 1.0f); setP("compThresh", -18.0f); setP("chamberSend", 0.24f);
             break;
         case 4:
-            setP("room", 2.0f); setP("walls", 0.0f); setP("source", 3.0f); setP("mainStereo", 1.0f);
+            setP("room", 2.0f); setP("walls", 0.0f); setP("source", 4.0f); setP("mainStereo", 1.0f);
             setP("mic1Gain", 1.00f); setP("mic2Gain", 0.22f); setP("mic3Gain", 0.38f); setP("mic4Gain", 0.38f);
             setP("mic1X", 0.50f); setP("mic1Y", 0.14f); setP("mic2X", 0.50f); setP("mic2Y", 0.36f);
             setP("mic3X", 0.16f); setP("mic3Y", 0.72f); setP("mic4X", 0.84f); setP("mic4Y", 0.72f);

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <JuceHeader.h>
+#include <juce_gui_basics/juce_gui_basics.h>
 #include "PluginProcessor.h"
 
 class AndesLookAndFeel : public juce::LookAndFeel_V4
@@ -95,45 +95,37 @@ private:
     std::vector<std::unique_ptr<ButtonAtt>> buttonAtts;
     std::vector<std::unique_ptr<SliderAtt>> sliderAtts;
 
-    // Top bar
     juce::ComboBox cbMode, cbRouting, cbPresets;
     juce::ToggleButton btHqMode, btPhaseSafe, btPolarity, btSnapCenter, btLink34;
     juce::TextButton btCenterMic { "CENTER MIC" }, btVuMode { "VU: OUT" }, btExpandStage { "EXPAND STAGE" };
 
-    // Stage
     juce::ToggleButton btMainStereo { "MAIN STEREO" }, btRoomOn { "ROOM ON" };
 
-    // Left rack
     juce::ToggleButton btVocalMod { "VOCAL MIC MOD" };
     juce::ComboBox cbVocalIn, cbVocalTarget, cbSource, cbMonitor, cbRoom, cbWalls, cbCircuit;
     juce::Slider slVocalIn, slVocalOut, slDrive;
     juce::Label lbVocalIn, lbVocalOut, lbDrive;
 
-    // 4 Mics strip
     juce::TextButton btMicSelect[4];
     juce::Slider slMicGain[4], slPairWide, slFarWide;
     juce::ToggleButton btMicSolo[4];
     juce::Label lbPairWide, lbFarWide;
 
-    // Right rack: Echo Chambers
     juce::ToggleButton btChamberOn { "ON" };
     juce::ComboBox cbChamberModel;
     juce::Slider slChamberSend, slChamberDecay, slChamberPre, slChamberWidth;
     juce::Label lbChSend, lbChDecay, lbChPre, lbChWidth;
 
-    // Bottom Left: EQ
     juce::ToggleButton btEqOn { "EQ ON" };
     juce::ComboBox cbEqModel, cbLowFreq, cbMidFreq, cbHighFreq;
     juce::Slider slHpf, slLowGain, slMidGain, slHighGain;
     juce::Label lbHpf, lbLow, lbMid, lbHigh;
 
-    // Bottom Mid: Comp & Parallel
     juce::ToggleButton btCompOn { "COMP ON" }, btScLink { "SC LINK" }, btScFilter { "SC FILTER" }, btParCrush { "PAR CRUSH" };
     juce::ComboBox cbCompModel, cbParRoute;
     juce::Slider slCompThresh, slCompMix, slParBlend;
     juce::Label lbCompThresh, lbCompMix, lbParBlend;
 
-    // Bottom Right: Master
     juce::Slider slOutput;
     juce::Label lbOutput;
 

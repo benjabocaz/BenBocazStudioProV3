@@ -115,6 +115,7 @@ private:
     void applyFactoryPreset (int idx);
     void updateSoloButtonsUI();
     void updateSelectedStandButtonsUI (int selIdx);
+    void updateHqModeButtonText();
     void setupKnob (juce::Slider& slider, juce::Label& label, const juce::String& text);
     void setupStandKnob (juce::Slider& slider, juce::TextButton& selectBtn, const juce::String& text, int standIdx);
     void setupCombo (juce::ComboBox& box, const juce::StringArray& items, juce::Label& label, const juce::String& text);
@@ -134,6 +135,7 @@ private:
     juce::ToggleButton snapCenterBtn { "SNAP CENTER" };
     juce::ToggleButton link34Btn     { "LINK 3+4" };
     juce::TextButton centerSelBtn   { "CENTER MIC" };
+    juce::ToggleButton hqModeBtn     { "MIXING 4x HQ" };
     juce::TextButton tipsBtn        { "i TIPS" };
     juce::TextButton expandStageBtn { "EXPAND STAGE" };
 
@@ -177,7 +179,7 @@ private:
     using ComboAtt  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using ButtonAtt = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
-    std::unique_ptr<ButtonAtt> phaseAlignAtt, phaseInvAtt, vocalModAtt, mainStereoAtt, roomOnAtt, chamberOnAtt;
+    std::unique_ptr<ButtonAtt> phaseAlignAtt, phaseInvAtt, hqModeAtt, vocalModAtt, mainStereoAtt, roomOnAtt, chamberOnAtt;
     std::unique_ptr<ButtonAtt> eqOnAtt, compOnAtt, compScLinkAtt, compScFiltAtt, parCompOnAtt;
     std::unique_ptr<ComboAtt>  modeAtt, chainAtt, vocalSrcAtt, vocalTgtAtt, sourceAtt, monitorAtt, roomAtt, wallsAtt, eqTubeAtt, chamberAtt;
     std::unique_ptr<ComboAtt>  eqTypeAtt, eqLowFreqAtt, eqMidFreqAtt, eqHighFreqAtt, compAtt, parRouteAtt;

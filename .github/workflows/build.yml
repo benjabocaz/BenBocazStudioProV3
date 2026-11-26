@@ -1,28 +1,38 @@
-name: Build Ben Bocaz Studio Pro (AU)
+name: Build macOS Plugin
 
 on:
   push:
-    branches:
-      - "**"
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
-  build-macos-au:
+  build-macos:
     runs-on: macos-15-intel
+
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64"
+        run: |
+          cmake -B build -G Xcode \
+            -DCMAKE_OSX_ARCHITECTURES="arm64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="11.0"
 
-      - name: Build AU Plugin
-        run: cmake --build build --config Release --target BenBocazStudioPro_AU --parallel
+      - name: Build AU and VST3 targets
+        run: |
+          cmake --build build --config Release --target BenBocazStudioPro_AU BenBocazStudioPro_VST3
 
-      - name: Ad-Hoc Codesign AU
-        run: codesign --force --deep --sign - "build/BenBocazStudioPro_artefacts/Release/AU/Ben Bocaz Studio Pro.component"
+      - name: Package artifacts
+        run: |
+          mkdir -p artifacts
+          find build -name "*.component" -exec cp -R {} artifacts/ \;
+          find build -name "*.vst3" -exec cp -R {} artifacts/ \;
 
-      - name: Upload AU Artifact
-        uses: actions/upload-artifact@v6
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: BenBocazStudioPro-AU
-          path: build/BenBocazStudioPro_artefacts/Release/AU/Ben Bocaz Studio Pro.component
+          name: Los-Andes-Capital-macOS-arm64
+          path: artifacts/

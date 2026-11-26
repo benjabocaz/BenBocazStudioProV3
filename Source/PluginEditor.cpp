@@ -645,7 +645,7 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
         juce::Colour (0xfff5ebd6)
     };
 
-    const float roomD = (roomIdx == 0) ? 12.0f : ((roomIdx == 1) ? 8.5f : 11.5f);
+    const float roomD = (roomIdx == 0) ? 12.5f : ((roomIdx == 1) ? 8.5f : 16.0f);
     const int soloIdx = processor.getSoloStand();
 
     for (int idx : order)
@@ -663,7 +663,7 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
         const float headY = base.y - vh * 0.84f;
 
         const float my    = apvts.getRawParameterValue ("mic" + juce::String (idx + 1) + "Y")->load();
-        const float distM = juce::jmap (my, 0.0f, 1.0f, 0.3f, roomD - 1.5f);
+        const float distM = juce::jmap (my, 0.0f, 1.0f, 0.35f, roomD - 1.5f);
         const float alpha = stageAlpha;
         const auto col    = cols[static_cast<size_t> (idx)];
         const bool active = (idx == selectedStand || idx == hoveredStand) && roomIsOn;
@@ -731,7 +731,7 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
         const juce::String selPfx = "mic" + juce::String (selectedStand + 1);
         const float selX = apvts.getRawParameterValue (selPfx + "X")->load();
         const float selY = apvts.getRawParameterValue (selPfx + "Y")->load();
-        const float selDist = juce::jmap (selY, 0.0f, 1.0f, 0.3f, roomD - 1.5f);
+        const float selDist = juce::jmap (selY, 0.0f, 1.0f, 0.35f, roomD - 1.5f);
 
         juce::String panStr = "CENTER (0.00)";
         if (selX < -0.02f) panStr = juce::String (std::abs (selX) * 100.0f, 0) + "% L";

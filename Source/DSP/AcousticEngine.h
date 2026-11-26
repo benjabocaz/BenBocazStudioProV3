@@ -9,9 +9,9 @@ namespace BenBocazDSP
 
 struct MicState
 {
-    float x = 0.5f;      // 0.0 (izq) .. 1.0 (der)
-    float y = 0.25f;     // 0.0 (cerca fuente) .. 1.0 (fondo sala)
-    float gain = 1.0f;   // 0.0 .. 1.0
+    float x = 0.5f;
+    float y = 0.25f;
+    float gain = 1.0f;
     bool solo = false;
 };
 
@@ -24,8 +24,8 @@ public:
     {
         fs = std::max(8000.0, sampleRate);
         maxBlock = std::max(64, maxBlockSize);
+        lastMicDistM.fill(-1.0f);
 
-        // Buffer de retardo de hasta 120 ms (cubre > 35 metros a cualquier fs)
         const int maxDelaySamples = static_cast<int>(fs * 0.120) + 16;
         for (int m = 0; m < 4; ++m)
         {
@@ -44,7 +44,13 @@ public:
 
         roomRevL.setSampleRate(fs);
         roomRevR.setSampleRate(fs);
+        coupledStoneRev.setSampleRate(fs);
         chamberRev.setSampleRate(fs);
+
+        coupledPreDelayL.prepare({ fs, static_cast<juce::uint32>(maxBlock), 1 });
+        coupledPreDelayR.prepare({ fs, static_cast<juce::uint32>(maxBlock), 1 });
+        coupledPreDelayL.setMaximumDelayInSamples(static_cast<int>(fs * 0.080) + 16);
+        coupledPreDelayR.setMaximumDelayInSamples(static_cast<int>(fs * 0.080) + 16);
 
         chamberPreDelayL.prepare({ fs, static_cast<juce::uint32>(maxBlock), 1 });
         chamberPreDelayR.prepare({ fs, static_cast<juce::uint32>(maxBlock), 1 });
@@ -54,6 +60,7 @@ public:
         roomBusBuffer.setSize(2, maxBlock);
         tailBufferL.setSize(2, maxBlock);
         tailBufferR.setSize(2, maxBlock);
+        coupledBuffer.setSize(2, maxBlock);
         chamberBuffer.setSize(2, maxBlock);
 
         reset();
@@ -64,19 +71,24 @@ public:
     {
         for (int m = 0; m < 4; ++m)
         {
-            delayL[m].reset();
-            delayR[m].reset();
-            airLpfL[m].reset();
-            airLpfR[m].reset();
+            delayL[m].reset(); delayR[m].reset();
+            airLpfL[m].reset(); airLpfR[m].reset();
+        }
+        for (int c = 0; c < 2; ++c)
+        {
+            tailLowFilter[c].reset();
+            tailHighFilter[c].reset();
         }
         roomRevL.reset();
         roomRevR.reset();
+        coupledStoneRev.reset();
+        coupledPreDelayL.reset();
+        coupledPreDelayR.reset();
         chamberRev.reset();
         chamberPreDelayL.reset();
         chamberPreDelayR.reset();
     }
 
-    // Distancia real en metros segun sala y coordenada Y (curva no lineal en Volcano)
     static float computeDistanceMeters(int roomIndex, float x, float y) noexcept
     {
         const float dx = (x - 0.5f);
@@ -84,7 +96,6 @@ public:
 
         if (roomIndex == VOLCANO)
         {
-            // Curva suave: 0..0.65 -> 1.2m..11.5m (precision), 0.65..1.0 -> hasta ~21.5m
             const float depthM = 1.2f + 10.3f * dy + 10.0f * (dy * dy * dy);
             const float widthM = dx * 12.0f;
             return std::sqrt(depthM * depthM + widthM * widthM);
@@ -95,7 +106,6 @@ public:
             const float widthM = dx * 7.5f;
             return std::sqrt(depthM * depthM + widthM * widthM);
         }
-        // CANYON
         const float depthM = 0.9f + 7.6f * dy;
         const float widthM = dx * 5.8f;
         return std::sqrt(depthM * depthM + widthM * widthM);
@@ -105,7 +115,7 @@ public:
                      juce::AudioBuffer<float>& outRoomOnlyBuffer,
                      bool roomEnabled,
                      int roomIndex,
-                     int wallsIndex, // 0 = Open / Live, 1 = Closed / Tight
+                     int wallsIndex,
                      bool mainStereo,
                      bool phaseSafe,
                      float pairWide,
@@ -113,8 +123,7 @@ public:
                      const std::array<MicState, 4>& mics)
     {
         const int numSamples = ioBuffer.getNumSamples();
-        if (numSamples == 0)
-            return;
+        if (numSamples == 0) return;
 
         if (!roomEnabled)
         {
@@ -131,11 +140,11 @@ public:
         }
 
         if (dirtyRoom)
-            updateRoomReverbParams();
+            updateRoomProfile();
 
         const bool anySolo = mics[0].solo || mics[1].solo || mics[2].solo || mics[3].solo;
+        const bool volcanoGatesOpen = (roomIndex == VOLCANO && wallsIndex == 0);
 
-        // Prepara colas difusas descorrelacionadas (L y R distintos para FAR L / FAR R)
         tailBufferL.setSize(2, numSamples, false, false, true);
         tailBufferR.setSize(2, numSamples, false, false, true);
         tailBufferL.copyFrom(0, 0, ioBuffer, 0, 0, numSamples);
@@ -146,7 +155,43 @@ public:
         roomRevL.processStereo(tailBufferL.getWritePointer(0), tailBufferL.getWritePointer(1), numSamples);
         roomRevR.processStereo(tailBufferR.getWritePointer(0), tailBufferR.getWritePointer(1), numSamples);
 
-        // Actualiza targets de los 4 atriles
+        // Perfil de materiales por bandas (Canyon seco, Shangri-La asimetrico vidrio L / madera R, Volcano piedra)
+        auto* tLL = tailBufferL.getWritePointer(0);
+        auto* tLR = tailBufferL.getWritePointer(1);
+        auto* tRL = tailBufferR.getWritePointer(0);
+        auto* tRR = tailBufferR.getWritePointer(1);
+        for (int i = 0; i < numSamples; ++i)
+        {
+            tLL[i] = tailHighFilter[0].processSample(tailLowFilter[0].processSample(tLL[i]));
+            tLR[i] = tailHighFilter[1].processSample(tailLowFilter[1].processSample(tLR[i]));
+            tRL[i] = tailHighFilter[0].processSample(tailLowFilter[0].processSample(tRL[i]));
+            tRR[i] = tailHighFilter[1].processSample(tailLowFilter[1].processSample(tRR[i]));
+        }
+
+        // Camara trasera de piedra volcanica acoplada (solo Volcano Gates Open)
+        const float* cL = nullptr;
+        const float* cR = nullptr;
+        if (volcanoGatesOpen)
+        {
+            coupledBuffer.setSize(2, numSamples, false, false, true);
+            const float preSmp = static_cast<float>(fs) * 0.028f; // ~28ms de distancia a la camara trasera
+            const float* srcL = ioBuffer.getReadPointer(0);
+            const float* srcR = ioBuffer.getNumChannels() > 1 ? ioBuffer.getReadPointer(1) : srcL;
+            auto* dstL = coupledBuffer.getWritePointer(0);
+            auto* dstR = coupledBuffer.getWritePointer(1);
+
+            for (int i = 0; i < numSamples; ++i)
+            {
+                coupledPreDelayL.pushSample(0, srcL[i]);
+                coupledPreDelayR.pushSample(0, srcR[i]);
+                dstL[i] = coupledPreDelayL.popSample(0, preSmp);
+                dstR[i] = coupledPreDelayR.popSample(0, preSmp);
+            }
+            coupledStoneRev.processStereo(dstL, dstR, numSamples);
+            cL = dstL;
+            cR = dstR;
+        }
+
         const float maxRoomM = (roomIndex == VOLCANO) ? 21.5f : (roomIndex == SHANGRILA ? 11.5f : 8.5f);
         for (int m = 0; m < 4; ++m)
         {
@@ -156,17 +201,16 @@ public:
             distSmooth[m].setTargetValue(distM);
             gainSmooth[m].setTargetValue(effGain);
 
-            float pan = (mics[m].x - 0.5f) * 2.0f; // -1..+1
+            float pan = (mics[m].x - 0.5f) * 2.0f;
             if (m == 1) pan *= (0.4f + 0.6f * pairWide);
             if (m == 2 || m == 3) pan = std::clamp(pan * (0.6f + 0.6f * farWide), -1.0f, 1.0f);
             panSmooth[m].setTargetValue(pan);
 
-            // Filtro de absorcion de aire por distancia (actualizado solo si cambia > 0.25m)
             if (std::abs(distM - lastMicDistM[m]) > 0.25f)
             {
                 lastMicDistM[m] = distM;
                 const float normD = std::clamp(distM / maxRoomM, 0.0f, 1.0f);
-                const float lpfHz = 18500.0f - normD * (roomIndex == VOLCANO ? 11500.0f : 9000.0f);
+                const float lpfHz = 18500.0f - normD * (roomIndex == VOLCANO ? 11000.0f : (roomIndex == SHANGRILA ? 7500.0f : 9500.0f));
                 auto c = juce::dsp::IIR::Coefficients<float>::makeLowPass(fs, std::clamp(lpfHz, 3500.0f, 19000.0f), 0.707f);
                 airLpfL[m].coefficients = c;
                 airLpfR[m].coefficients = c;
@@ -180,18 +224,13 @@ public:
 
         const float* inL = ioBuffer.getReadPointer(0);
         const float* inR = ioBuffer.getNumChannels() > 1 ? ioBuffer.getReadPointer(1) : inL;
-        const float* revLL = tailBufferL.getReadPointer(0);
-        const float* revLR = tailBufferL.getReadPointer(1);
-        const float* revRL = tailBufferR.getReadPointer(0);
-        const float* revRR = tailBufferR.getReadPointer(1);
-
         auto* outL = roomBusBuffer.getWritePointer(0);
         auto* outR = roomBusBuffer.getWritePointer(1);
         auto* roomOnlyL = outRoomOnlyBuffer.getWritePointer(0);
         auto* roomOnlyR = outRoomOnlyBuffer.getWritePointer(1);
 
         const float samplesPerMeter = static_cast<float>(fs) / 343.0f;
-        const float gateTailBoost = (roomIndex == VOLCANO && wallsIndex == 0) ? 1.32f : 1.0f;
+        const float gateTailBoost = volcanoGatesOpen ? 1.25f : 1.0f;
 
         for (int i = 0; i < numSamples; ++i)
         {
@@ -199,10 +238,8 @@ public:
             const float dryR = inR[i];
             const float dryMono = 0.5f * (dryL + dryR);
 
-            float sumL = 0.0f;
-            float sumR = 0.0f;
-            float ambOnlyL = 0.0f;
-            float ambOnlyR = 0.0f;
+            float sumL = 0.0f, sumR = 0.0f;
+            float ambOnlyL = 0.0f, ambOnlyR = 0.0f;
 
             for (int m = 0; m < 4; ++m)
             {
@@ -210,7 +247,6 @@ public:
                 const float distM = distSmooth[m].getNextValue();
                 const float pan = panSmooth[m].getNextValue();
 
-                // Tiempo de vuelo real (reducido si Phase Safe esta activo para evitar comb filtering)
                 float delaySamples = distM * samplesPerMeter;
                 if (phaseSafe)
                     delaySamples = (m == 0) ? 0.0f : std::min(delaySamples * 0.25f, static_cast<float>(fs) * 0.012f);
@@ -218,67 +254,51 @@ public:
                 delayL[m].pushSample(0, (m == 0 && !mainStereo) ? dryMono : dryL);
                 delayR[m].pushSample(0, (m == 0 && !mainStereo) ? dryMono : dryR);
 
-                if (g < 0.0005f)
-                    continue;
+                if (g < 0.0005f) continue;
 
-                float dL = delayL[m].popSample(0, delaySamples);
-                float dR = delayR[m].popSample(0, delaySamples);
-
-                dL = airLpfL[m].processSample(dL);
-                dR = airLpfR[m].processSample(dR);
+                float dL = airLpfL[m].processSample(delayL[m].popSample(0, delaySamples));
+                float dR = airLpfR[m].processSample(delayR[m].popSample(0, delaySamples));
 
                 const float normD = std::clamp(distM / maxRoomM, 0.0f, 1.0f);
                 const float directRatio = std::clamp(1.0f - normD * (m >= 2 ? 0.78f : 0.55f), 0.15f, 1.0f);
                 const float wetRatio = (0.18f + normD * (m >= 2 ? 0.95f : 0.65f)) * gateTailBoost;
 
-                float sigL = 0.0f;
-                float sigR = 0.0f;
+                const float stoneL = volcanoGatesOpen ? (cL[i] * (m >= 2 ? 0.42f : 0.16f)) : 0.0f;
+                const float stoneR = volcanoGatesOpen ? (cR[i] * (m >= 2 ? 0.42f : 0.16f)) : 0.0f;
 
-                if (m == 0) // 1: MAIN
+                float sigL = 0.0f, sigR = 0.0f;
+                if (m == 0)
                 {
-                    sigL = dL * directRatio + revLL[i] * (wetRatio * 0.30f);
-                    sigR = dR * directRatio + revLR[i] * (wetRatio * 0.30f);
+                    sigL = dL * directRatio + tLL[i] * (wetRatio * 0.30f) + stoneL * 0.35f;
+                    sigR = dR * directRatio + tLR[i] * (wetRatio * 0.30f) + stoneR * 0.35f;
                 }
-                else if (m == 1) // 2: ROOM / AIR
+                else if (m == 1)
                 {
-                    sigL = dL * (directRatio * 0.65f) + revLL[i] * (wetRatio * 0.70f);
-                    sigR = dR * (directRatio * 0.65f) + revLR[i] * (wetRatio * 0.70f);
+                    sigL = dL * (directRatio * 0.65f) + tLL[i] * (wetRatio * 0.70f) + stoneL * 0.75f;
+                    sigR = dR * (directRatio * 0.65f) + tLR[i] * (wetRatio * 0.70f) + stoneR * 0.75f;
                 }
-                else if (m == 2) // 3: FAR L (Mono descorrelacionado hacia izquierda)
+                else if (m == 2)
                 {
-                    const float monoFarL = 0.5f * (dL + dR) * (directRatio * 0.45f) + (0.65f * revLL[i] + 0.35f * revLR[i]) * wetRatio;
-                    sigL = monoFarL;
-                    sigR = monoFarL;
+                    const float monoFarL = 0.5f * (dL + dR) * (directRatio * 0.45f) + (0.65f * tLL[i] + 0.35f * tLR[i]) * wetRatio + stoneL;
+                    sigL = sigR = monoFarL;
                 }
-                else // 4: FAR R (Mono descorrelacionado hacia derecha)
+                else
                 {
-                    const float monoFarR = 0.5f * (dL + dR) * (directRatio * 0.45f) + (0.65f * revRR[i] + 0.35f * revRL[i]) * wetRatio;
-                    sigL = monoFarR;
-                    sigR = monoFarR;
+                    const float monoFarR = 0.5f * (dL + dR) * (directRatio * 0.45f) + (0.65f * tRR[i] + 0.35f * tRL[i]) * wetRatio + stoneR;
+                    sigL = sigR = monoFarR;
                 }
 
-                // Paneo constant-power
                 const float angle = (pan * 0.5f + 0.5f) * juce::MathConstants<float>::halfPi;
-                const float pL = std::cos(angle);
-                const float pR = std::sin(angle);
-
-                const float outMicL = sigL * pL * g * 1.15f;
-                const float outMicR = sigR * pR * g * 1.15f;
+                const float outMicL = sigL * std::cos(angle) * g * 1.15f;
+                const float outMicR = sigR * std::sin(angle) * g * 1.15f;
 
                 sumL += outMicL;
                 sumR += outMicR;
-
-                if (m >= 1)
-                {
-                    ambOnlyL += outMicL;
-                    ambOnlyR += outMicR;
-                }
+                if (m >= 1) { ambOnlyL += outMicL; ambOnlyR += outMicR; }
             }
 
-            outL[i] = sumL;
-            outR[i] = sumR;
-            roomOnlyL[i] = ambOnlyL;
-            roomOnlyR[i] = ambOnlyR;
+            outL[i] = sumL; outR[i] = sumR;
+            roomOnlyL[i] = ambOnlyL; roomOnlyR[i] = ambOnlyR;
         }
 
         ioBuffer.copyFrom(0, 0, roomBusBuffer, 0, 0, numSamples);
@@ -301,7 +321,6 @@ public:
         chamberBuffer.setSize(2, numSamples, false, false, true);
 
         const float preSamples = std::clamp(preDelayMs * 0.001f * static_cast<float>(fs), 0.0f, static_cast<float>(fs) * 0.140f);
-
         const float* inL = ioBuffer.getReadPointer(0);
         const float* inR = ioBuffer.getNumChannels() > 1 ? ioBuffer.getReadPointer(1) : inL;
         auto* cL = chamberBuffer.getWritePointer(0);
@@ -333,35 +352,63 @@ public:
     }
 
 private:
-    void updateRoomReverbParams()
+    void updateRoomProfile()
     {
         juce::Reverb::Parameters pL, pR;
-        const bool gatesOpen = (lastWalls == 0);
+        const bool isOpen = (lastWalls == 0);
 
         if (lastRoom == VOLCANO)
         {
-            pL.roomSize = gatesOpen ? 0.90f : 0.68f;
-            pL.damping  = gatesOpen ? 0.28f : 0.52f;
+            // Piedra volcanica + madera ranurada: sosten profundo en graves y difusion alta
+            pL.roomSize = isOpen ? 0.88f : 0.68f;
+            pL.damping  = isOpen ? 0.26f : 0.50f;
             pL.width    = 1.0f;
+
+            auto lo = juce::dsp::IIR::Coefficients<float>::makeLowShelf(fs, 210.0f, 0.707f, juce::Decibels::decibelsToGain(isOpen ? 2.2f : 1.0f));
+            auto hi = juce::dsp::IIR::Coefficients<float>::makeHighShelf(fs, 5500.0f, 0.707f, juce::Decibels::decibelsToGain(isOpen ? 1.0f : -1.2f));
+            tailLowFilter[0].coefficients  = tailLowFilter[1].coefficients  = lo;
+            tailHighFilter[0].coefficients = tailHighFilter[1].coefficients = hi;
+
+            juce::Reverb::Parameters stoneP;
+            stoneP.roomSize = 0.94f;
+            stoneP.damping  = 0.22f;
+            stoneP.wetLevel = 1.0f;
+            stoneP.dryLevel = 0.0f;
+            stoneP.width    = 1.0f;
+            stoneP.freezeMode = 0.0f;
+            coupledStoneRev.setParameters(stoneP);
         }
         else if (lastRoom == SHANGRILA)
         {
-            pL.roomSize = gatesOpen ? 0.66f : 0.48f;
-            pL.damping  = gatesOpen ? 0.42f : 0.62f;
-            pL.width    = 0.92f;
+            // Asimetria fisica: Ventanal vidrio a la izquierda (+brillo) vs Estanterias/madera a la derecha (+calidez)
+            pL.roomSize = isOpen ? 0.66f : 0.48f;
+            pL.damping  = isOpen ? 0.38f : 0.58f;
+            pL.width    = 0.94f;
+
+            auto lo = juce::dsp::IIR::Coefficients<float>::makeLowShelf(fs, 180.0f, 0.707f, juce::Decibels::decibelsToGain(-0.8f));
+            tailLowFilter[0].coefficients = tailLowFilter[1].coefficients = lo;
+
+            // Canal 0 (Izquierda - Vidrio vivo) vs Canal 1 (Derecha - Estanterias/difusion suave)
+            tailHighFilter[0].coefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf(fs, 4500.0f, 0.707f, juce::Decibels::decibelsToGain(isOpen ? 2.6f : 1.2f));
+            tailHighFilter[1].coefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf(fs, 4200.0f, 0.707f, juce::Decibels::decibelsToGain(isOpen ? -1.4f : -2.4f));
         }
         else // CANYON
         {
-            pL.roomSize = gatesOpen ? 0.46f : 0.30f;
-            pL.damping  = gatesOpen ? 0.55f : 0.74f;
-            pL.width    = 0.85f;
+            // Techo artesonado + trampas de graves de esquina: graves secos/amarrados y agudos sedosos
+            pL.roomSize = isOpen ? 0.42f : 0.26f;
+            pL.damping  = isOpen ? 0.58f : 0.76f;
+            pL.width    = 0.84f;
+
+            auto lo = juce::dsp::IIR::Coefficients<float>::makeHighPass(fs, isOpen ? 140.0f : 180.0f, 0.707f);
+            auto hi = juce::dsp::IIR::Coefficients<float>::makeLowPass(fs, isOpen ? 6800.0f : 5200.0f, 0.707f);
+            tailLowFilter[0].coefficients  = tailLowFilter[1].coefficients  = lo;
+            tailHighFilter[0].coefficients = tailHighFilter[1].coefficients = hi;
         }
 
         pL.wetLevel = 1.0f;
         pL.dryLevel = 0.0f;
         pL.freezeMode = 0.0f;
 
-        // Ligera diferencia en pR para descorrelar FAR L vs FAR R
         pR = pL;
         pR.roomSize = std::clamp(pL.roomSize * 0.97f, 0.20f, 0.96f);
         pR.damping  = std::clamp(pL.damping + 0.04f, 0.10f, 0.90f);
@@ -383,10 +430,12 @@ private:
 
     std::array<juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear>, 4> distSmooth, gainSmooth, panSmooth;
 
-    juce::Reverb roomRevL, roomRevR, chamberRev;
+    juce::dsp::IIR::Filter<float> tailLowFilter[2], tailHighFilter[2];
+    juce::Reverb roomRevL, roomRevR, coupledStoneRev, chamberRev;
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> coupledPreDelayL, coupledPreDelayR;
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> chamberPreDelayL, chamberPreDelayR;
 
-    juce::AudioBuffer<float> roomBusBuffer, tailBufferL, tailBufferR, chamberBuffer;
+    juce::AudioBuffer<float> roomBusBuffer, tailBufferL, tailBufferR, coupledBuffer, chamberBuffer;
 };
 
 } // namespace BenBocazDSP

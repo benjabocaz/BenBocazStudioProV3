@@ -297,11 +297,17 @@ juce::Point<float> Studio4MicStagePad::getStandBasePos (int idx, juce::Rectangle
     const juce::String pfx = "mic" + juce::String (idx + 1);
     const float mx = apvts.getRawParameterValue (pfx + "X")->load();
     const float my = apvts.getRawParameterValue (pfx + "Y")->load();
+    const int roomIdx = std::clamp (static_cast<int> (apvts.getRawParameterValue ("room")->load()), 0, 2);
 
-    const float yTop  = area.getY() + area.getHeight() * 0.75f;
-    const float yBot  = area.getBottom() - 14.0f;
+    const float yTopRatio = (roomIdx == 2) ? 0.72f : 0.75f;
+    const float yBotPad   = (roomIdx == 2) ? 12.0f : 14.0f;
+    const float backHalfW = (roomIdx == 2) ? 0.21f : 0.30f;
+    const float frontHalfW = 0.43f;
+
+    const float yTop  = area.getY() + area.getHeight() * yTopRatio;
+    const float yBot  = area.getBottom() - yBotPad;
     const float sy    = juce::jmap (my, 0.0f, 1.0f, yTop, yBot);
-    const float halfW = juce::jmap (my, 0.0f, 1.0f, area.getWidth() * 0.30f, area.getWidth() * 0.43f);
+    const float halfW = juce::jmap (my, 0.0f, 1.0f, area.getWidth() * backHalfW, area.getWidth() * frontHalfW);
     const float sx    = area.getCentreX() + mx * halfW;
     return { sx, sy };
 }
@@ -309,7 +315,10 @@ juce::Point<float> Studio4MicStagePad::getStandBasePos (int idx, juce::Rectangle
 float Studio4MicStagePad::getStandScale (int idx) const
 {
     const float my = apvts.getRawParameterValue ("mic" + juce::String (idx + 1) + "Y")->load();
-    return juce::jmap (my, 0.0f, 1.0f, 0.78f, 1.20f);
+    const int roomIdx = std::clamp (static_cast<int> (apvts.getRawParameterValue ("room")->load()), 0, 2);
+    const float minScale = (roomIdx == 2) ? 0.72f : 0.78f;
+    const float maxScale = (roomIdx == 2) ? 1.18f : 1.20f;
+    return juce::jmap (my, 0.0f, 1.0f, minScale, maxScale);
 }
 
 float Studio4MicStagePad::getStandVisualHeight (int idx, float scale) const
@@ -558,12 +567,12 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     if (isCanyon)
         floorRatio = isCabinetSource ? 0.725f : 0.735f;
     else if (isVolcano)
-        floorRatio = isCabinetSource ? 0.710f : 0.720f;
+        floorRatio = isCabinetSource ? 0.712f : 0.722f;
     else
         floorRatio = isCabinetSource ? 0.690f : 0.700f;
 
     const float srcFloorY = area.getY() + area.getHeight() * floorRatio;
-    const float roomScale = isCanyon ? 0.88f : (isVolcano ? 0.96f : 1.04f);
+    const float roomScale = isCanyon ? 0.88f : (isVolcano ? 0.95f : 1.04f);
 
     g.setColour (juce::Colours::black.withAlpha (0.48f * stageAlpha));
     g.fillEllipse (srcFloorX - 66.0f * roomScale, srcFloorY - 7.0f, 132.0f * roomScale, 16.0f);
@@ -841,11 +850,17 @@ void Studio4MicStagePad::mouseUp (const juce::MouseEvent& e)
 
 void Studio4MicStagePad::updateStandFromBasePoint (int idx, juce::Point<float> targetBase, juce::Rectangle<float> area)
 {
-    const float yTop = area.getY() + area.getHeight() * 0.75f;
-    const float yBot = area.getBottom() - 14.0f;
+    const int roomIdx = std::clamp (static_cast<int> (apvts.getRawParameterValue ("room")->load()), 0, 2);
+    const float yTopRatio = (roomIdx == 2) ? 0.72f : 0.75f;
+    const float yBotPad   = (roomIdx == 2) ? 12.0f : 14.0f;
+    const float backHalfW = (roomIdx == 2) ? 0.21f : 0.30f;
+    const float frontHalfW = 0.43f;
+
+    const float yTop = area.getY() + area.getHeight() * yTopRatio;
+    const float yBot = area.getBottom() - yBotPad;
 
     const float normY = juce::jlimit (0.0f, 1.0f, (targetBase.y - yTop) / std::max (1.0f, yBot - yTop));
-    const float halfW = juce::jmap (normY, 0.0f, 1.0f, area.getWidth() * 0.30f, area.getWidth() * 0.43f);
+    const float halfW = juce::jmap (normY, 0.0f, 1.0f, area.getWidth() * backHalfW, area.getWidth() * frontHalfW);
     float normX = juce::jlimit (0.0f, 1.0f, 0.5f + 0.5f * ((targetBase.x - area.getCentreX()) / std::max (1.0f, halfW)));
 
     if (snapToCenter && std::abs (normX - 0.5f) < 0.032f)

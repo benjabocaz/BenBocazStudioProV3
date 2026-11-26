@@ -3,66 +3,58 @@
 #include "DSP/AnalogModules.h"
 #include "DSP/VocalMicModeler.h"
 #include "DSP/AcousticEngine.h"
+#include <atomic>
 
-class BenBocazStudioProProcessor : public juce::AudioProcessor
+class BenBocazStudioProAudioProcessor : public juce::AudioProcessor
 {
 public:
-    BenBocazStudioProProcessor();
-    ~BenBocazStudioProProcessor() override = default;
+    BenBocazStudioProAudioProcessor();
+    ~BenBocazStudioProAudioProcessor() override = default;
 
-    void prepareToPlay (double sampleRate, int samplesPerBlock) override;
+    void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
-    bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
-    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
+    void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return JucePlugin_Name; }
+    const juce::String getName() const override { return "Los Andes Capital"; }
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 5.0; }
+    double getTailLengthSeconds() const override { return 3.5; }
 
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return {}; }
-    void changeProgramName (int, const juce::String&) override {}
+    int getNumPrograms() override { return 6; }
+    int getCurrentProgram() override { return currentPresetIndex; }
+    void setCurrentProgram(int index) override;
+    const juce::String getProgramName(int index) override;
+    void changeProgramName(int, const juce::String&) override {}
 
-    void getStateInformation (juce::MemoryBlock& destData) override;
-    void setStateInformation (const void* data, int sizeInBytes) override;
+    void getStateInformation(juce::MemoryBlock& destData) override;
+    void setStateInformation(const void* data, int sizeInBytes) override;
 
-    void loadCustomIR (const juce::File& file) { acousticEngine.loadCustomImpulseResponse (file); }
-    juce::String getLoadedIRName() const { return acousticEngine.getLoadedIRName(); }
+    void applyFactoryPreset(int presetIndex);
 
-    float getOutputVuDb() const { return outputVuDb.load(); }
-    float getCompGrDb() const { return consoleChain.mainComp.getGainReductionDb(); }
-
-    void setSoloStand (int idx) { soloStandIndex.store (idx); }
-    int getSoloStand() const { return soloStandIndex.load(); }
-
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     juce::AudioProcessorValueTreeState apvts;
 
+    // Medidores atomicos para la UI
+    std::atomic<float> vuOutDb { -60.0f };
+    std::atomic<float> vuGrDb  { 0.0f };
+
 private:
-    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    BenBocazDSP::VocalMicModeler vocalModeler;
+    BenBocazDSP::OversampledConsoleChain consoleChain;
+    BenBocazDSP::AcousticEngine acousticEngine;
+    BenBocazDSP::VintageCompressor parallelComp;
 
-    void updateFiltersAndChain();
-    void processConsoleStage (juce::AudioBuffer<float>& buffer, bool speakerBreakup);
-    void processChamberStage (juce::AudioBuffer<float>& buffer);
+    juce::AudioBuffer<float> roomOnlyBuffer;
+    juce::AudioBuffer<float> parCrushBuffer;
 
-    double currentSampleRate = 44100.0;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> outGainSmooth;
+    int currentPresetIndex = 0;
+    int lastReportedLatency = -1;
 
-    StereoBiquad srcHpf, srcLpf, srcMid;
-    CabinetVoicingStage cabVoicing;
-
-    VocalMicModeler vocalMicModeler;
-    OversampledConsoleChain consoleChain;
-    AcousticEngine acousticEngine;
-
-    juce::AudioBuffer<float> chamberScratch;
-    std::atomic<float> outputVuDb { -60.0f };
-    std::atomic<int> soloStandIndex { -1 };
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BenBocazStudioProProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BenBocazStudioProAudioProcessor)
 };

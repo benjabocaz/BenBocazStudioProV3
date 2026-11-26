@@ -153,17 +153,23 @@ public:
         roomFdn.prepare (sr);
         chamberFdn.prepare (sr);
         roomAmbComp.prepare (sr);
+        chamberAmbComp.prepare (sr);
 
         midPhaseHpf.prepare (sr);   midPhaseHpf.setHighPass (105.0f, 0.7071f);
         airPhaseHpf.prepare (sr);   airPhaseHpf.setHighPass (165.0f, 0.7071f);
         deccaPhaseHpf.prepare (sr); deccaPhaseHpf.setHighPass (90.0f, 0.7071f);
 
-        // Control suave de acumulación de graves/medios-graves en la sala y cámara
+        // Filtros dedicados para la Sala
         roomBoomDip.prepare (sr);   roomBoomDip.setPeak (240.0f, -2.4f, 1.05f);
         roomSubHpf.prepare (sr);    roomSubHpf.setHighPass (48.0f, 0.7071f);
-
         deMudHpf.prepare (sr);      deMudHpf.setHighPass (165.0f, 0.7071f);
         deMudDip.prepare (sr);      deMudDip.setPeak (275.0f, -4.5f, 1.1f);
+
+        // Filtros dedicados para la Cámara (sin compartir estado con la Sala)
+        chamberBoomDip.prepare (sr);  chamberBoomDip.setPeak (240.0f, -2.4f, 1.05f);
+        chamberSubHpf.prepare (sr);   chamberSubHpf.setHighPass (48.0f, 0.7071f);
+        chamberDeMudHpf.prepare (sr); chamberDeMudHpf.setHighPass (165.0f, 0.7071f);
+        chamberDeMudDip.prepare (sr); chamberDeMudDip.setPeak (275.0f, -4.5f, 1.1f);
 
         juce::dsp::ProcessSpec spec;
         spec.sampleRate = sr;
@@ -172,6 +178,7 @@ public:
 
         preDelay.prepare (spec);
         customConvolver.prepare (spec);
+        mainAirLpL = mainAirLpR = 0.0f;
         airLpL = airLpR = 0.0f;
     }
 
@@ -180,11 +187,15 @@ public:
         std::fill (erBufL.begin(), erBufL.end(), 0.0f);
         std::fill (erBufR.begin(), erBufR.end(), 0.0f);
         erWritePos = 0;
-        roomFdn.reset(); chamberFdn.reset(); roomAmbComp.reset();
+        roomFdn.reset(); chamberFdn.reset();
+        roomAmbComp.reset(); chamberAmbComp.reset();
         midPhaseHpf.reset(); airPhaseHpf.reset(); deccaPhaseHpf.reset();
         roomBoomDip.reset(); roomSubHpf.reset();
         deMudHpf.reset(); deMudDip.reset();
+        chamberBoomDip.reset(); chamberSubHpf.reset();
+        chamberDeMudHpf.reset(); chamberDeMudDip.reset();
         preDelay.reset(); customConvolver.reset();
+        mainAirLpL = mainAirLpR = 0.0f;
         airLpL = airLpR = 0.0f;
     }
 
@@ -239,14 +250,18 @@ public:
             const float ang = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
             panL[s] = std::cos (ang) * 1.414f;
             panR[s] = std::sin (ang) * 1.414f;
+        }
 
-            // Retardo físico real por distancia entre atriles:
-            // - Con Phase Safe OFF: retardo directo por distancia respecto al atril 1.
-            // - Con Phase Safe ON: mantiene retardo real por distancia pero suavizado para evitar comb agresivo.
+        // Retardo base de 1:MAIN y retardos físicos coherentes para 2:MID, 3:AIR y 4:DECCA
+        const float mainDelaySamples = (distMeters[0] / speed) * static_cast<float> (sr);
+        delaySamples[0] = mainDelaySamples;
+
+        for (size_t s = 1; s < 4; ++s)
+        {
             const float relDist = std::max (0.0f, distMeters[s] - distMeters[0]);
-            const float rawDelaySec = relDist / speed;
-            const float delaySec = cfg.phaseSafe ? (rawDelaySec * 0.65f) : rawDelaySec;
-            delaySamples[s] = delaySec * static_cast<float> (sr);
+            const float rawRelSec = relDist / speed;
+            const float relSec = cfg.phaseSafe ? (rawRelSec * 0.65f) : rawRelSec;
+            delaySamples[s] = mainDelaySamples + relSec * static_cast<float> (sr);
         }
 
         // Reflexiones tempranas asimétricas y escalonadas (pared izquierda/derecha, piso/techo y pared trasera)
@@ -307,7 +322,7 @@ public:
             float mainL = 0.0f, mainR = 0.0f;
             float ambL  = 0.0f, ambR  = 0.0f;
 
-            // ATRIL 1: MAIN (retardo físico por distancia + absorción de aire al alejarse)
+            // ATRIL 1: MAIN (retardo físico + filtro pasa-bajos suave de absorción de aire por distancia)
             if (activeGain[0] > 0.001f)
             {
                 const float g = activeGain[0];
@@ -315,14 +330,14 @@ public:
                 const float dirW = juce::jmap (yDist, 0.0f, 1.0f, 0.94f, 0.32f);
                 const float ambW = juce::jmap (yDist, 0.0f, 1.0f, 0.14f, 0.68f);
 
-                const float mainDelay = (distMeters[0] / speed) * static_cast<float> (sr);
-                float dirL = readFrac (erBufL, mainDelay);
-                float dirR = readFrac (erBufR, mainDelay);
+                float dirL = readFrac (erBufL, delaySamples[0]);
+                float dirR = readFrac (erBufR, delaySamples[0]);
 
-                // Absorción sutil de aire según distancia
-                const float airAbsorb = juce::jmap (yDist, 0.0f, 1.0f, 0.06f, 0.34f);
-                dirL = dirL * (1.0f - airAbsorb * 0.35f);
-                dirR = dirR * (1.0f - airAbsorb * 0.35f);
+                const float mainAirCoeff = juce::jmap (yDist, 0.0f, 1.0f, 0.02f, 0.32f);
+                mainAirLpL = dirL * (1.0f - mainAirCoeff) + mainAirLpL * mainAirCoeff;
+                mainAirLpR = dirR * (1.0f - mainAirCoeff) + mainAirLpR * mainAirCoeff;
+                dirL = mainAirLpL;
+                dirR = mainAirLpR;
 
                 float sL = dirL * dirW + (erL * 0.72f + fdnL * 0.52f) * ambW;
                 float sR = dirR * dirW + (erR * 0.72f + fdnR * 0.52f) * ambW;
@@ -420,7 +435,6 @@ public:
 
             if (cfg.modeIdx == 0)
             {
-                // Compensación sutil de nivel al sumar ambiente de sala en modo Reverb
                 left[i]  = (dryL + mixL * 0.55f * polaritySign) * 0.92f;
                 right[i] = (dryR + mixR * 0.55f * polaritySign) * 0.92f;
             }
@@ -492,7 +506,7 @@ public:
         }
 
         if (chamberParallelCrush && parallelAmt > 0.001f)
-            roomAmbComp.configure (3, -24.0f, true, true);
+            chamberAmbComp.configure (3, -24.0f, true, true);
 
         auto* sL = scratchBuffer.getWritePointer (0);
         auto* sR = scratchBuffer.getWritePointer (1);
@@ -502,16 +516,16 @@ public:
 
         for (int i = 0; i < numSamples; ++i)
         {
-            float cL = roomBoomDip.processSample (0, roomSubHpf.processSample (0, sL[i]));
-            float cR = roomBoomDip.processSample (1, roomSubHpf.processSample (1, sR[i]));
+            float cL = chamberBoomDip.processSample (0, chamberSubHpf.processSample (0, sL[i]));
+            float cR = chamberBoomDip.processSample (1, chamberSubHpf.processSample (1, sR[i]));
 
             if (deMudOn)
             {
-                cL = deMudDip.processSample (0, deMudHpf.processSample (0, cL));
-                cR = deMudDip.processSample (1, deMudHpf.processSample (1, cR));
+                cL = chamberDeMudDip.processSample (0, chamberDeMudHpf.processSample (0, cL));
+                cR = chamberDeMudDip.processSample (1, chamberDeMudHpf.processSample (1, cR));
             }
             if (chamberParallelCrush && parallelAmt > 0.001f)
-                roomAmbComp.processStereoSample (cL, cR, parallelAmt, dummyGr);
+                chamberAmbComp.processStereoSample (cL, cR, parallelAmt, dummyGr);
 
             const float mid  = 0.5f * (cL + cR);
             const float side = 0.5f * (cL - cR) * stereoWidth;
@@ -534,13 +548,14 @@ private:
     double sr = 44100.0;
     size_t erBufSize = 16384, erMask = 16383, erWritePos = 0;
     std::vector<float> erBufL, erBufR;
+    float mainAirLpL = 0.0f, mainAirLpR = 0.0f;
     float airLpL = 0.0f, airLpR = 0.0f;
 
     StereoBiquad midPhaseHpf, airPhaseHpf, deccaPhaseHpf;
-    StereoBiquad roomBoomDip, roomSubHpf;
-    StereoBiquad deMudHpf, deMudDip;
+    StereoBiquad roomBoomDip, roomSubHpf, deMudHpf, deMudDip;
+    StereoBiquad chamberBoomDip, chamberSubHpf, chamberDeMudHpf, chamberDeMudDip;
     HadamardFDN roomFdn, chamberFdn;
-    VintageCompressor roomAmbComp;
+    VintageCompressor roomAmbComp, chamberAmbComp;
 
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> preDelay { 48000 };
     juce::dsp::Convolution customConvolver;

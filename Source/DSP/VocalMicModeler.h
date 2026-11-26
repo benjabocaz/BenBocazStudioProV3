@@ -1,121 +1,137 @@
 #pragma once
-#include "AnalogModules.h"
+#include <juce_dsp/juce_dsp.h>
+#include <cmath>
+#include <algorithm>
+
+namespace BenBocazDSP
+{
 
 class VocalMicModeler
 {
 public:
-    void prepare (double sampleRate)
+    void prepare(double sampleRate)
     {
-        invLow.prepare (sampleRate);  invMid.prepare (sampleRate);  invHigh.prepare (sampleRate);
-        tgtLow.prepare (sampleRate);  tgtMid.prepare (sampleRate);  tgtHigh.prepare (sampleRate);
+        fs = std::max(8000.0, sampleRate);
+        inGainSmooth.reset(fs, 0.02);
+        outGainSmooth.reset(fs, 0.02);
+        mixSmooth.reset(fs, 0.02);
+
+        inGainSmooth.setCurrentAndTargetValue(1.0f);
+        outGainSmooth.setCurrentAndTargetValue(1.0f);
+        mixSmooth.setCurrentAndTargetValue(0.0f);
+
         reset();
+        dirty = true;
     }
 
     void reset()
     {
-        invLow.reset(); invMid.reset(); invHigh.reset();
-        tgtLow.reset(); tgtMid.reset(); tgtHigh.reset();
-        dcIn = { 0.0f, 0.0f };
-        dcOut = { 0.0f, 0.0f };
-    }
-
-    void updateCurves (int sourceMicIdx, int targetMicIdx)
-    {
-        switch (sourceMicIdx)
+        for (int c = 0; c < 2; ++c)
         {
-            case 0: // Shure SM27
-                invLow.setLowShelf (180.0f, 0.8f);
-                invMid.setPeak (7500.0f, -1.6f, 1.4f);
-                invHigh.setHighShelf (12500.0f, -0.6f);
-                break;
-
-            case 1: // Shure SM57
-                invLow.setLowShelf (135.0f, 3.2f);
-                invMid.setPeak (4500.0f, -4.2f, 1.1f);
-                invHigh.setHighShelf (11000.0f, 3.8f);
-                break;
-
-            case 2: // Shure SM7B
-                invLow.setPeak (220.0f, -2.2f, 0.9f);
-                invMid.setPeak (3000.0f, 2.8f, 1.0f);
-                invHigh.setHighShelf (10500.0f, 3.5f);
-                break;
-
-            default: // Generic Large Diaphragm Condenser
-                invLow.setPeak (310.0f, -1.5f, 1.2f);
-                invMid.setPeak (8800.0f, -2.8f, 1.8f);
-                invHigh.setBypass();
-                break;
-        }
-
-        targetIdx = targetMicIdx;
-        switch (targetMicIdx)
-        {
-            case 0: // Sony C-800G
-                tgtLow.setLowShelf (85.0f, -1.2f);
-                tgtMid.setPeak (3200.0f, 1.4f, 1.1f);
-                tgtHigh.setHighShelf (10500.0f, 4.0f);
-                break;
-
-            case 1: // Neumann TLM 103
-                tgtLow.setLowShelf (140.0f, 1.4f);
-                tgtMid.setPeak (5800.0f, 2.6f, 0.95f);
-                tgtHigh.setHighShelf (11500.0f, 2.0f);
-                break;
-
-            default: // Aston Origin
-                tgtLow.setPeak (240.0f, 1.8f, 0.9f);
-                tgtMid.setPeak (2100.0f, 1.4f, 1.1f);
-                tgtHigh.setHighShelf (12500.0f, -1.2f);
-                break;
+            lowShelf[c].reset();
+            midPeak[c].reset();
+            airShelf[c].reset();
         }
     }
 
-    void process (juce::AudioBuffer<float>& buffer, bool enabled, float inputDb, float outputDb)
+    void setParameters(bool enabled, int inputMicIndex, int targetMicIndex,
+                       float inGainDb, float outGainDb)
     {
-        if (! enabled) return;
+        if (inMic != inputMicIndex || targetMic != targetMicIndex)
+        {
+            inMic = inputMicIndex;
+            targetMic = targetMicIndex;
+            dirty = true;
+        }
 
-        const float inGain = juce::Decibels::decibelsToGain (inputDb);
-        buffer.applyGain (inGain);
+        isEnabled = enabled;
+        inGainSmooth.setTargetValue(juce::Decibels::decibelsToGain(inGainDb));
+        outGainSmooth.setTargetValue(juce::Decibels::decibelsToGain(outGainDb));
+        mixSmooth.setTargetValue(enabled ? 1.0f : 0.0f);
+        currentDrive = enabled ? std::clamp((inGainDb + 6.0f) / 18.0f, 0.05f, 0.85f) : 0.0f;
+    }
 
-        invLow.processBuffer (buffer);
-        invMid.processBuffer (buffer);
-        invHigh.processBuffer (buffer);
+    // Procesa la curva tonal de microfono con crossfade suave anti-clics
+    void processEQ(juce::AudioBuffer<float>& buffer)
+    {
+        if (buffer.getNumSamples() == 0)
+            return;
 
-        tgtLow.processBuffer (buffer);
-        tgtMid.processBuffer (buffer);
-        tgtHigh.processBuffer (buffer);
+        if (!isEnabled && !mixSmooth.isSmoothing() && mixSmooth.getCurrentValue() < 0.0001f)
+            return;
 
-        float drive = 0.0f, asym = 0.0f;
-        if (targetIdx == 0)      { drive = 0.24f; asym = 0.055f; } // C-800G Tube 6AU6
-        else if (targetIdx == 1) { drive = 0.04f; asym = 0.005f; } // TLM 103 Transformerless
-        else                     { drive = 0.16f; asym = 0.030f; } // Aston Origin Class-A
+        if (dirty)
+            updateMicCurves();
 
-        const float pre = 1.0f + drive * 1.6f;
-        const float post = (1.0f / (1.0f + drive * 0.72f)) * juce::Decibels::decibelsToGain (outputDb);
-        const float biasComp = std::tanh (asym);
-
-        const int numCh = std::min (2, buffer.getNumChannels());
+        const int numCh = std::min(2, buffer.getNumChannels());
         const int numSamples = buffer.getNumSamples();
 
-        for (int ch = 0; ch < numCh; ++ch)
+        for (int i = 0; i < numSamples; ++i)
         {
-            auto* data = buffer.getWritePointer (ch);
-            for (int i = 0; i < numSamples; ++i)
+            const float gIn  = inGainSmooth.getNextValue();
+            const float gOut = outGainSmooth.getNextValue();
+            const float mix  = mixSmooth.getNextValue();
+
+            for (int c = 0; c < numCh; ++c)
             {
-                const float y = std::tanh (data[i] * pre + asym) - biasComp;
-                const float dc = y - dcIn[static_cast<size_t> (ch)] + 0.997f * dcOut[static_cast<size_t> (ch)];
-                dcIn[static_cast<size_t> (ch)] = y;
-                dcOut[static_cast<size_t> (ch)] = dc;
-                data[i] = dc * post;
+                const float dry = buffer.getSample(c, i);
+                float wet = dry * gIn;
+                wet = lowShelf[c].processSample(wet);
+                wet = midPeak[c].processSample(wet);
+                wet = airShelf[c].processSample(wet);
+                wet *= gOut;
+                buffer.setSample(c, i, dry + mix * (wet - dry));
             }
         }
     }
 
+    float getSaturationDrive() const noexcept { return currentDrive; }
+    bool isActive() const noexcept { return isEnabled; }
+
 private:
-    StereoBiquad invLow, invMid, invHigh;
-    StereoBiquad tgtLow, tgtMid, tgtHigh;
-    int targetIdx = 0;
-    std::array<float, 2> dcIn { 0.0f, 0.0f };
-    std::array<float, 2> dcOut { 0.0f, 0.0f };
+    void updateMicCurves()
+    {
+        // Compensacion aproximada segun microfono de entrada -> destino
+        float loDb = 0.0f, midDb = 0.0f, airDb = 0.0f;
+        float midHz = 3200.0f, airHz = 10000.0f;
+
+        // Entrada: 0=SM7B, 1=U87, 2=NT1/Condenser, 3=SM58
+        if (inMic == 0)      { loDb -= 1.2f; midDb += 1.5f; airDb += 2.5f; }
+        else if (inMic == 3) { loDb -= 2.0f; midDb -= 1.0f; airDb += 3.2f; }
+
+        // Destino: 0=Sony C-800G, 1=Neumann U47, 2=Telefunken 251, 3=U87 Vintage
+        switch (targetMic)
+        {
+            case 0: loDb += 0.8f; midDb += 1.2f; airDb += 3.5f; midHz = 4200.0f; airHz = 11500.0f; break;
+            case 1: loDb += 2.2f; midDb += 1.5f; airDb -= 0.5f; midHz = 1800.0f; airHz = 9000.0f;  break;
+            case 2: loDb += 1.0f; midDb += 0.6f; airDb += 2.8f; midHz = 3500.0f; airHz = 12000.0f; break;
+            default: loDb += 0.5f; midDb += 1.8f; airDb += 0.8f; midHz = 2800.0f; airHz = 10000.0f; break;
+        }
+
+        auto loC  = juce::dsp::IIR::Coefficients<float>::makeLowShelf(fs, 140.0f, 0.707f, juce::Decibels::decibelsToGain(loDb));
+        auto midC = juce::dsp::IIR::Coefficients<float>::makePeakFilter(fs, midHz, 0.9f, juce::Decibels::decibelsToGain(midDb));
+        auto airC = juce::dsp::IIR::Coefficients<float>::makeHighShelf(fs, airHz, 0.707f, juce::Decibels::decibelsToGain(airDb));
+
+        for (int c = 0; c < 2; ++c)
+        {
+            lowShelf[c].coefficients = loC;
+            midPeak[c].coefficients  = midC;
+            airShelf[c].coefficients = airC;
+        }
+        dirty = false;
+    }
+
+    double fs = 48000.0;
+    bool isEnabled = false;
+    int inMic = 0;
+    int targetMic = 0;
+    float currentDrive = 0.0f;
+    bool dirty = true;
+
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> inGainSmooth, outGainSmooth;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> mixSmooth;
+
+    juce::dsp::IIR::Filter<float> lowShelf[2], midPeak[2], airShelf[2];
 };
+
+} // namespace BenBocazDSP

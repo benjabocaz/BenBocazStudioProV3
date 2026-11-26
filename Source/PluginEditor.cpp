@@ -499,7 +499,7 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
 {
     auto area = getLocalBounds().toFloat().reduced (2.0f);
     const bool roomIsOn   = apvts.getRawParameterValue ("roomOn")->load() >= 0.5f;
-    const int roomIdx     = static_cast<int> (apvts.getRawParameterValue ("room")->load());
+    const int roomIdx     = std::clamp (static_cast<int> (apvts.getRawParameterValue ("room")->load()), 0, 2);
     const int wallsLive   = static_cast<int> (apvts.getRawParameterValue ("walls")->load());
     const int sourceIdx   = static_cast<int> (apvts.getRawParameterValue ("source")->load());
     const int monitorIdx  = static_cast<int> (apvts.getRawParameterValue ("monitorType")->load());
@@ -513,8 +513,25 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     g.saveState();
     g.reduceClipRegion (clip);
 
-    const juce::Image& activeRoom = (roomIdx == 1 && canyonImg.isValid()) ? canyonImg
-                                                                          : (shangriLaImg.isValid() ? shangriLaImg : canyonImg);
+    juce::Image activeRoom;
+    if (roomIdx == 2)
+    {
+        if (wallsLive != 0)
+            activeRoom = volcanoOpenImg.isValid() ? volcanoOpenImg : volcanoClosedImg;
+        else
+            activeRoom = volcanoClosedImg.isValid() ? volcanoClosedImg : volcanoOpenImg;
+        if (! activeRoom.isValid())
+            activeRoom = shangriLaImg.isValid() ? shangriLaImg : canyonImg;
+    }
+    else if (roomIdx == 1)
+    {
+        activeRoom = canyonImg.isValid() ? canyonImg : (shangriLaImg.isValid() ? shangriLaImg : volcanoOpenImg);
+    }
+    else
+    {
+        activeRoom = shangriLaImg.isValid() ? shangriLaImg : (canyonImg.isValid() ? canyonImg : volcanoOpenImg);
+    }
+
     if (activeRoom.isValid())
     {
         g.drawImage (activeRoom, area, juce::RectanglePlacement::fillDestination);
@@ -534,11 +551,19 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
 
     const float srcFloorX = area.getCentreX();
     const bool isCabinetSource = (sourceIdx >= 4);
-    const bool isCanyon = (roomIdx == 1);
-    const float floorRatio = isCanyon ? (isCabinetSource ? 0.725f : 0.735f)
-                                      : (isCabinetSource ? 0.69f  : 0.70f);
+    const bool isCanyon  = (roomIdx == 1);
+    const bool isVolcano = (roomIdx == 2);
+
+    float floorRatio = 0.70f;
+    if (isCanyon)
+        floorRatio = isCabinetSource ? 0.725f : 0.735f;
+    else if (isVolcano)
+        floorRatio = isCabinetSource ? 0.710f : 0.720f;
+    else
+        floorRatio = isCabinetSource ? 0.690f : 0.700f;
+
     const float srcFloorY = area.getY() + area.getHeight() * floorRatio;
-    const float roomScale = isCanyon ? 0.88f : 1.04f;
+    const float roomScale = isCanyon ? 0.88f : (isVolcano ? 0.96f : 1.04f);
 
     g.setColour (juce::Colours::black.withAlpha (0.48f * stageAlpha));
     g.fillEllipse (srcFloorX - 66.0f * roomScale, srcFloorY - 7.0f, 132.0f * roomScale, 16.0f);
@@ -611,7 +636,7 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
         juce::Colour (0xfff5ebd6)
     };
 
-    const float roomD = (roomIdx == 0) ? 12.0f : 8.5f;
+    const float roomD = (roomIdx == 0) ? 12.0f : ((roomIdx == 1) ? 8.5f : 11.5f);
     const int soloIdx = processor.getSoloStand();
 
     for (int idx : order)
@@ -731,7 +756,7 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
 
     g.setColour (juce::Colour (0xfff4d08c).withAlpha (roomIsOn ? 1.0f : 0.55f));
     g.setFont (juce::Font (juce::FontOptions (9.8f).withStyle ("Bold")));
-    juce::String roomTitle = (roomIdx == 0 ? "STUDIO A (SHANGRI-LA)" : "STUDIO B (CANYON)");
+    juce::String roomTitle = (roomIdx == 0 ? "STUDIO A (SHANGRI-LA)" : ((roomIdx == 1) ? "STUDIO B (CANYON)" : "VOLCANO"));
     roomTitle += (wallsLive ? "  |  LIVE WOOD" : "  |  TIGHT");
     g.drawText (roomTitle, topBar, juce::Justification::centredLeft);
 
@@ -948,7 +973,7 @@ BenBocazStudioProEditor::BenBocazStudioProEditor (BenBocazStudioProProcessor& p)
     setupCombo (vocalTgtBox,  { "Sony C-800G", "Neumann TLM 103", "Aston Origin" }, vocalTgtLbl, "TARGET VOCAL MIC");
     setupCombo (sourceBox,    { "Vocals", "Drums", "Ensemble", "Monitors (Swedien)", "Guitar Cab (Mono)", "Guitar Cab (Stereo)", "Bass Amp (Low End)" }, sourceLbl, "ROOM SOURCE");
     setupCombo (monitorBox,   { "Altec Main", "NS-10 Nearfield", "JBL PA Wedge" }, monitorLbl, "MONITOR SPEAKER");
-    setupCombo (roomBox,      { "Studio A (Shangri-La)", "Studio B (Canyon)" }, roomLbl, "STUDIO ROOM");
+    setupCombo (roomBox,      { "Studio A (Shangri-La)", "Studio B (Canyon)", "Volcano" }, roomLbl, "STUDIO ROOM");
     setupCombo (wallsBox,     { "Tight / Damped", "Live / Cedar Wood" }, wallsLbl, "ROOM WALLS");
     setupCombo (eqTubeBox,    { "Neve Class-A", "Pultec 12AX7", "API 2520", "SSL Clean" }, eqTubeLbl, "TUBE CIRCUIT");
     setupCombo (chamberBox,   { "Chamber 1 (Bright)", "Chamber 3 (Classic)", "Chamber 5 (Deep)", "Chamber 8 (Dense)", "Custom WAV IR" }, chamberLbl, "ECHO CHAMBER");
@@ -1140,7 +1165,14 @@ void BenBocazStudioProEditor::loadEmbeddedImages()
             auto img = juce::ImageFileFormat::loadFrom (data, static_cast<size_t> (dataSize));
             if (! img.isValid()) continue;
 
-            if (resName.containsIgnoreCase ("canyon"))
+            if (resName.containsIgnoreCase ("volcano"))
+            {
+                if (resName.containsIgnoreCase ("closed"))
+                    roomPad.setVolcanoClosedImage (img);
+                else
+                    roomPad.setVolcanoOpenImage (img);
+            }
+            else if (resName.containsIgnoreCase ("canyon"))
                 roomPad.setCanyonImage (img);
             else if (resName.containsIgnoreCase ("shangri"))
                 roomPad.setShangriLaImage (img);

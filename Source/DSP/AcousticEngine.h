@@ -116,8 +116,8 @@ struct MultiMicRoomConfig
 {
     int modeIdx = 1;       // 0: Reverb, 1: Re-Mic
     int sourceIdx = 0;     // 0: Vocals, 1: Drums, 2: Ensemble, 3: Monitors, 4: Guitar Mono, 5: Guitar Stereo, 6: Bass Amp
-    int roomIdx = 0;       // 0: Studio A (Shangri-La), 1: Studio B (Canyon)
-    int wallsLive = 1;     // 0: Tight, 1: Live
+    int roomIdx = 0;       // 0: Studio A (Shangri-La), 1: Studio B (Canyon), 2: Volcano
+    int wallsLive = 1;     // 0: Tight / Closed, 1: Live / Open
     bool phaseSafe = true;
     bool phaseInvert = false;
     bool mainStereo = false;
@@ -223,17 +223,24 @@ public:
 
         static constexpr std::array<float, 8> studioADelays { 29.3f, 37.1f, 43.7f, 53.3f, 61.9f, 71.1f, 83.3f, 97.7f };
         static constexpr std::array<float, 8> studioBDelays { 17.3f, 21.1f, 26.9f, 31.7f, 37.9f, 43.1f, 51.3f, 59.7f };
+        static constexpr std::array<float, 8> volcanoDelays { 24.7f, 31.3f, 39.7f, 47.9f, 57.1f, 66.7f, 77.3f, 89.9f };
 
-        const float baseRt60 = (cfg.roomIdx == 0) ? (cfg.wallsLive ? 1.85f : 1.15f)
-                                                  : (cfg.wallsLive ? 1.05f : 0.62f);
+        const int rIdx = std::clamp (cfg.roomIdx, 0, 2);
+
+        float baseRt60 = 1.85f;
+        if (rIdx == 0)      baseRt60 = cfg.wallsLive ? 1.85f : 1.15f;
+        else if (rIdx == 1) baseRt60 = cfg.wallsLive ? 1.05f : 0.62f;
+        else                baseRt60 = cfg.wallsLive ? 1.55f : 0.82f;
+
         const float damp = cfg.wallsLive ? 0.26f : 0.56f;
-        roomFdn.setProfile (cfg.roomIdx == 0 ? studioADelays : studioBDelays, baseRt60, damp, 0.35f);
+        const auto& activeDelays = (rIdx == 0) ? studioADelays : ((rIdx == 1) ? studioBDelays : volcanoDelays);
+        roomFdn.setProfile (activeDelays, baseRt60, damp, 0.35f);
 
         if (cfg.roomParallelCrush)
             roomAmbComp.configure (3, -24.0f, true, true);
 
-        const float roomW = (cfg.roomIdx == 0) ? 16.0f : 10.5f;
-        const float roomD = (cfg.roomIdx == 0) ? 12.0f : 8.5f;
+        const float roomW = (rIdx == 0) ? 16.0f : ((rIdx == 1) ? 10.5f : 14.5f);
+        const float roomD = (rIdx == 0) ? 12.0f : ((rIdx == 1) ? 8.5f  : 11.5f);
         const float speed = 343.0f;
         const float wallRef = cfg.wallsLive ? 0.72f : 0.44f;
 
@@ -285,7 +292,7 @@ public:
         }
 
         // Reflexiones tempranas asimétricas y escalonadas (pared izquierda/derecha, piso/techo y pared trasera)
-        const float roomScaleEr = (cfg.roomIdx == 0) ? 1.18f : 0.82f;
+        const float roomScaleEr = (rIdx == 0) ? 1.18f : ((rIdx == 1) ? 0.82f : 1.06f);
         const size_t erSideL = static_cast<size_t> (0.0112f * roomScaleEr * sr);
         const size_t erSideR = static_cast<size_t> (0.0158f * roomScaleEr * sr);
         const size_t erFloor = static_cast<size_t> (0.0194f * roomScaleEr * sr);
@@ -486,7 +493,9 @@ public:
         if (! enabled || sendMix <= 0.001f || mainBuffer.getNumChannels() < 2) return;
 
         const int numSamples = mainBuffer.getNumSamples();
-        scratchBuffer.setSize (2, numSamples, false, false, true);
+        if (scratchBuffer.getNumChannels() < 2 || scratchBuffer.getNumSamples() < numSamples)
+            scratchBuffer.setSize (2, numSamples, false, false, true);
+
         scratchBuffer.copyFrom (0, 0, mainBuffer, 0, 0, numSamples);
         scratchBuffer.copyFrom (1, 0, mainBuffer, 1, 0, numSamples);
 

@@ -243,7 +243,7 @@ public:
             activeGain[s] = mutedBySolo ? 0.0f : cfg.micGain[s];
 
             const float mx = cfg.micX[s] * (roomW * 0.38f);
-            const float my = juce::jmap (cfg.micY[s], 0.0f, 1.0f, 1.2f, roomD - 1.2f);
+            const float my = juce::jmap (cfg.micY[s], 0.0f, 1.0f, 0.3f, roomD - 1.5f);
             distMeters[s] = std::hypot (mx, my);
 
             const float pan = std::clamp (cfg.micX[s] * 0.65f, -0.85f, 0.85f);
@@ -327,13 +327,13 @@ public:
             {
                 const float g = activeGain[0];
                 const float yDist = cfg.micY[0];
-                const float dirW = juce::jmap (yDist, 0.0f, 1.0f, 0.94f, 0.32f);
-                const float ambW = juce::jmap (yDist, 0.0f, 1.0f, 0.14f, 0.68f);
+                const float dirW = juce::jmap (yDist, 0.0f, 1.0f, 0.98f, 0.32f);
+                const float ambW = juce::jmap (yDist, 0.0f, 1.0f, 0.06f, 0.68f);
 
                 float dirL = readFrac (erBufL, delaySamples[0]);
                 float dirR = readFrac (erBufR, delaySamples[0]);
 
-                const float mainAirCoeff = juce::jmap (yDist, 0.0f, 1.0f, 0.02f, 0.32f);
+                const float mainAirCoeff = juce::jmap (yDist, 0.0f, 1.0f, 0.0f, 0.32f);
                 mainAirLpL = dirL * (1.0f - mainAirCoeff) + mainAirLpL * mainAirCoeff;
                 mainAirLpR = dirR * (1.0f - mainAirCoeff) + mainAirLpR * mainAirCoeff;
                 dirL = mainAirLpL;

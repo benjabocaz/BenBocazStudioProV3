@@ -195,7 +195,7 @@ void BenBocazStudioProProcessor::processConsoleStage (juce::AudioBuffer<float>& 
     const int parRoute  = static_cast<int> (apvts.getRawParameterValue ("parCompRoute")->load());
 
     OversampledConsoleChain::ChainSettings s;
-    s.routingOrder   = (order == 1) ? 1 : 0;
+    s.routingOrder   = (order == 1 || order == 2) ? 1 : 0;
     s.eqOn           = apvts.getRawParameterValue ("eqOn")->load() >= 0.5f;
     s.compOn         = apvts.getRawParameterValue ("compOn")->load() >= 0.5f;
     s.compMix        = apvts.getRawParameterValue ("compMix")->load();

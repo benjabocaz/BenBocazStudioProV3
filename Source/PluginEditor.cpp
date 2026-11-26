@@ -309,13 +309,19 @@ juce::Point<float> Studio4MicStagePad::getStandBasePos (int idx, juce::Rectangle
 float Studio4MicStagePad::getStandScale (int idx) const
 {
     const float my = apvts.getRawParameterValue ("mic" + juce::String (idx + 1) + "Y")->load();
-    return juce::jmap (my, 0.0f, 1.0f, 0.76f, 1.16f);
+    return juce::jmap (my, 0.0f, 1.0f, 0.78f, 1.20f);
 }
 
 float Studio4MicStagePad::getStandVisualHeight (int idx, float scale) const
 {
-    const float baseH = (idx == 2) ? 124.0f : (idx == 3 ? 110.0f : 98.0f);
-    return baseH * scale;
+    // Alturas diferenciadas según el rol de cada atril:
+    // 0: MAIN (enfocado), 1: MID (medio), 2: AIR (alto/esbelto), 3: DECCA (árbol imponente)
+    static constexpr std::array<float, 4> baseHeights { 116.0f, 132.0f, 162.0f, 148.0f };
+    const float baseH = baseHeights[static_cast<size_t> (std::clamp (idx, 0, 3))];
+
+    // Escala proporcional al tamaño del escenario (se ve bien tanto en vista normal como en Expand Stage)
+    const float padFactor = std::clamp (static_cast<float> (getHeight()) / 360.0f, 0.88f, 1.48f);
+    return baseH * scale * padFactor;
 }
 
 juce::Rectangle<float> Studio4MicStagePad::getStandTagRect (int idx, juce::Rectangle<float> area) const
@@ -528,7 +534,7 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
 
     const float srcFloorX = area.getCentreX();
     const bool isCabinetSource = (sourceIdx >= 4);
-    const float srcFloorY = area.getY() + area.getHeight() * (isCabinetSource ? 0.77f : 0.70f);
+    const float srcFloorY = area.getY() + area.getHeight() * (isCabinetSource ? 0.69f : 0.70f);
     const float roomScale = (roomIdx == 1) ? 0.88f : 1.04f;
 
     g.setColour (juce::Colours::black.withAlpha (0.48f * stageAlpha));
@@ -538,12 +544,12 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     const auto& srcImg = sourceImgs[sIdx];
     if (srcImg.isValid())
     {
-        // Escalas más generosas para batería, ensamble y gabinetes/amplificadores
-        static constexpr std::array<float, 7> srcHeightRatios { 0.33f, 0.36f, 0.37f, 0.31f, 0.28f, 0.26f, 0.32f };
+        // Proporciones coherentes con los amplis ubicados más al fondo de la sala
+        static constexpr std::array<float, 7> srcHeightRatios { 0.33f, 0.36f, 0.37f, 0.31f, 0.25f, 0.23f, 0.29f };
         const float drawH  = area.getHeight() * srcHeightRatios[sIdx] * roomScale;
         const float aspect = static_cast<float> (srcImg.getWidth()) / std::max (1.0f, static_cast<float> (srcImg.getHeight()));
         const float drawW  = drawH * aspect;
-        const float yNudge = isCabinetSource ? 14.0f : 8.0f;
+        const float yNudge = isCabinetSource ? 6.0f : 8.0f;
 
         juce::Rectangle<float> srcDest (srcFloorX - drawW * 0.5f, srcFloorY - drawH + yNudge, drawW, drawH);
         g.setOpacity (stageAlpha);

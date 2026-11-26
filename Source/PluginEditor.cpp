@@ -213,9 +213,6 @@ void Studio4MicStagePad::loadEmbeddedImages()
         else if (name.containsIgnoreCase("src_drums"))                                     imgSrcDrums = removeGreenScreen(loadImg());
         else if (name.containsIgnoreCase("src_bass"))                                      imgSrcBass = removeGreenScreen(loadImg());
         else if (name.containsIgnoreCase("src_ensemble"))                                  imgSrcEnsemble = removeGreenScreen(loadImg());
-        else if (name.containsIgnoreCase("src_guitar_stereo") || name.containsIgnoreCase("src_cab_stereo")) imgSrcCabStereo = removeGreenScreen(loadImg());
-        else if (name.containsIgnoreCase("src_guitar") || name.containsIgnoreCase("src_cab"))               imgSrcCab = removeGreenScreen(loadImg());
-        else if (name.containsIgnoreCase("src_monitor") || name.containsIgnoreCase("src_monitors"))         imgSrcMonitors = removeGreenScreen(loadImg());
     }
 #endif
 }
@@ -243,22 +240,22 @@ void Studio4MicStagePad::centerSelectedMic()
 
 juce::Point<float> Studio4MicStagePad::normToScreen(float nx, float ny, juce::Rectangle<float> area) const
 {
-    const float yTop = area.getY() + area.getHeight() * 0.54f;
-    const float yBot = area.getBottom() - area.getHeight() * 0.05f;
+    const float yTop = area.getY() + area.getHeight() * 0.56f;
+    const float yBot = area.getBottom() - area.getHeight() * 0.04f;
     const float sy = yTop + ny * (yBot - yTop);
 
-    const float spread = 0.54f + 0.44f * ny;
+    const float spread = 0.52f + 0.44f * ny;
     const float sx = area.getCentreX() + (nx - 0.5f) * area.getWidth() * spread;
     return { sx, sy };
 }
 
 juce::Point<float> Studio4MicStagePad::screenToNorm(juce::Point<float> pt, juce::Rectangle<float> area) const
 {
-    const float yTop = area.getY() + area.getHeight() * 0.54f;
-    const float yBot = area.getBottom() - area.getHeight() * 0.05f;
+    const float yTop = area.getY() + area.getHeight() * 0.56f;
+    const float yBot = area.getBottom() - area.getHeight() * 0.04f;
     const float ny = std::clamp((pt.y - yTop) / std::max(1.0f, yBot - yTop), 0.05f, 0.95f);
 
-    const float spread = 0.54f + 0.44f * ny;
+    const float spread = 0.52f + 0.44f * ny;
     const float nx = std::clamp(0.5f + (pt.x - area.getCentreX()) / std::max(1.0f, area.getWidth() * spread), 0.05f, 0.95f);
     return { nx, ny };
 }
@@ -297,27 +294,35 @@ void Studio4MicStagePad::paint(juce::Graphics& g)
         g.fillRoundedRectangle(area, 4.0f);
     }
 
-    // 2. Fuente al fondo (Drums / Bass / Guitar Cab / Guitar Cab Stereo / Ensemble / Monitors)
+    // 2. Fuente asentada en el piso de la sala con escala de perspectiva
     const juce::Image* srcImg = nullptr;
     if (srcIdx == 1)      srcImg = &imgSrcDrums;
     else if (srcIdx == 2) srcImg = &imgSrcBass;
-    else if (srcIdx == 3) srcImg = mainSt && imgSrcCabStereo.isValid() ? &imgSrcCabStereo : &imgSrcCab;
     else if (srcIdx == 4) srcImg = &imgSrcEnsemble;
-    else if (srcIdx == 5) srcImg = &imgSrcMonitors;
+
+    const float floorLineY = area.getY() + area.getHeight() * 0.63f;
 
     if (srcImg && srcImg->isValid())
     {
-        const float sh = area.getHeight() * 0.28f;
+        const float heightRatio = (srcIdx == 1) ? 0.34f : (srcIdx == 4 ? 0.33f : 0.29f);
+        const float sh = area.getHeight() * heightRatio;
         const float sw = sh * (static_cast<float>(srcImg->getWidth()) / std::max(1, srcImg->getHeight()));
-        g.drawImage(*srcImg, juce::Rectangle<float>(area.getCentreX() - sw * 0.5f, area.getY() + area.getHeight() * 0.34f, sw, sh));
+        const float sx = area.getCentreX() - sw * 0.5f;
+        const float sy = floorLineY - sh; // Base anclada al suelo de la sala
+
+        // Sombra suave en el piso bajo la fuente
+        g.setColour(juce::Colour(0x660b0705));
+        g.fillEllipse(area.getCentreX() - sw * 0.45f, floorLineY - 5.0f, sw * 0.90f, 11.0f);
+
+        g.drawImage(*srcImg, juce::Rectangle<float>(sx, sy, sw, sh));
     }
     else if (srcIdx == 3 || srcIdx == 5)
     {
         const juce::String badge = (srcIdx == 3)
             ? (mainSt ? "GUITAR CAB STEREO" : "GUITAR CAB")
             : "MONITORS";
-        const juce::Rectangle<float> bRect(area.getCentreX() - 78.0f, area.getY() + area.getHeight() * 0.42f, 156.0f, 22.0f);
-        g.setColour(juce::Colour(0xc818120d));
+        const juce::Rectangle<float> bRect(area.getCentreX() - 88.0f, floorLineY - 26.0f, 176.0f, 22.0f);
+        g.setColour(juce::Colour(0xd018120d));
         g.fillRoundedRectangle(bRect, 4.0f);
         g.setColour(juce::Colour(0xffe6a84c));
         g.drawRoundedRectangle(bRect, 4.0f, 1.0f);
@@ -326,7 +331,7 @@ void Studio4MicStagePad::paint(juce::Graphics& g)
         g.drawFittedText(badge, bRect.toNearestInt(), juce::Justification::centred, 1);
     }
 
-    // 3. Dibujar 4 atriles ordenados por profundidad (Y)
+    // 3. Dibujar 4 atriles ordenados por profundidad (Y) y apoyados sobre el piso
     static constexpr const char* xIds[4] = { "mic1X", "mic2X", "mic3X", "mic4X" };
     static constexpr const char* yIds[4] = { "mic1Y", "mic2Y", "mic3Y", "mic4Y" };
     static constexpr const char* gIds[4] = { "mic1Gain", "mic2Gain", "mic3Gain", "mic4Gain" };
@@ -345,7 +350,7 @@ void Studio4MicStagePad::paint(juce::Graphics& g)
         const float gain = apvts.getRawParameterValue(gIds[idx])->load();
         const auto pos = normToScreen(nx, ny, area);
 
-        const float scale = 0.24f + 0.26f * ny;
+        const float scale = 0.22f + 0.25f * ny;
         const float micH = area.getHeight() * scale;
 
         const juce::Image* micImg = nullptr;
@@ -372,8 +377,10 @@ void Studio4MicStagePad::paint(juce::Graphics& g)
 
         if (idx == selectedMic)
         {
+            const float ringW = 24.0f + 16.0f * ny;
+            const float ringH = 8.0f + 5.0f * ny;
             g.setColour(juce::Colour(0xffffb84d));
-            g.drawEllipse(pos.x - 18.0f, pos.y - 7.0f, 36.0f, 13.0f, 2.2f);
+            g.drawEllipse(pos.x - ringW * 0.5f, pos.y - ringH * 0.5f, ringW, ringH, 2.0f);
         }
 
         const float distM = BenBocazDSP::AcousticEngine::computeDistanceMeters(roomIdx, nx, ny);
@@ -440,7 +447,7 @@ void Studio4MicStagePad::mouseDown(const juce::MouseEvent& e)
         const float nx = apvts.getRawParameterValue(xIds[i])->load();
         const float ny = apvts.getRawParameterValue(yIds[i])->load();
         const auto p = normToScreen(nx, ny, area);
-        const float micH = area.getHeight() * (0.24f + 0.26f * ny);
+        const float micH = area.getHeight() * (0.22f + 0.25f * ny);
 
         const float dBase = e.position.getDistanceFrom(p);
         const float dBody = e.position.getDistanceFrom(p.translated(0.0f, -micH * 0.45f));

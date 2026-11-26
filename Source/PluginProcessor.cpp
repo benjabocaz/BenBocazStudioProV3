@@ -7,7 +7,6 @@ BenBocazStudioProAudioProcessor::BenBocazStudioProAudioProcessor()
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "PARAMETERS", createParameterLayout())
 {
-    applyFactoryPreset(0);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProAudioProcessor::createParameterLayout()
@@ -35,7 +34,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProAudioProces
     p.push_back(std::make_unique<juce::AudioParameterChoice>("source", "Room Source", juce::StringArray{ "Vocals", "Drums", "Bass Amp", "Guitar Cab", "Ensemble", "Monitors" }, 0));
     p.push_back(std::make_unique<juce::AudioParameterChoice>("monitorSpeaker", "Monitor Speaker", juce::StringArray{ "Altec Main", "NS-10M", "Auratone" }, 0));
     p.push_back(std::make_unique<juce::AudioParameterChoice>("room", "Studio Room", juce::StringArray{ "Volcano Hall", "Shangri-La", "Canyon Room" }, 0));
-    p.push_back(std::make_unique<juce::AudioParameterChoice>("walls", "Room Walls", juce::StringArray{ "Gates Open", "Gates Closed" }, 0));
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("walls", "Room Walls", juce::StringArray{ "Gates Open", "Gates Closed" }, 1));
 
     // Tube / Tape Drive
     p.push_back(std::make_unique<juce::AudioParameterChoice>("circuit", "Tube Circuit", juce::StringArray{ "Neve Class-A", "API Discrete", "Ampex Tape" }, 0));
@@ -57,9 +56,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProAudioProces
     p.push_back(std::make_unique<juce::AudioParameterFloat>("mic2X", "Mic 2 X", 0.05f, 0.95f, 0.50f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>("mic2Y", "Mic 2 Y", 0.05f, 0.95f, 0.42f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>("mic3X", "Mic 3 X", 0.05f, 0.95f, 0.14f));
-    p.push_back(std::make_unique<juce::AudioParameterFloat>("mic3Y", "Mic 3 Y", 0.05f, 0.95f, 0.85f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("mic3Y", "Mic 3 Y", 0.05f, 0.95f, 0.86f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>("mic4X", "Mic 4 X", 0.05f, 0.95f, 0.86f));
-    p.push_back(std::make_unique<juce::AudioParameterFloat>("mic4Y", "Mic 4 Y", 0.05f, 0.95f, 0.85f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("mic4Y", "Mic 4 Y", 0.05f, 0.95f, 0.86f));
 
     p.push_back(std::make_unique<juce::AudioParameterFloat>("pairWide", "Pair Wide", 0.0f, 1.0f, 1.0f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>("farWide", "Far Wide", 0.0f, 1.0f, 1.0f));
@@ -89,7 +88,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProAudioProces
     // Echo Chambers
     p.push_back(std::make_unique<juce::AudioParameterBool>("chamberOn", "Chamber On", true));
     p.push_back(std::make_unique<juce::AudioParameterChoice>("chamberModel", "Echo Chamber", juce::StringArray{ "Chamber 1 (Tight)", "Chamber 2 (Warm)", "Chamber 3 (Classic)" }, 2));
-    p.push_back(std::make_unique<juce::AudioParameterFloat>("chamberSend", "Send", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.20f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("chamberSend", "Send", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.18f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>("chamberDecay", "Decay", juce::NormalisableRange<float>(0.10f, 1.0f, 0.01f), 0.72f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>("chamberPreDelay", "Pre-Delay", juce::NormalisableRange<float>(0.0f, 100.0f, 0.5f), 22.0f));
     p.push_back(std::make_unique<juce::AudioParameterFloat>("chamberWidth", "Width", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 1.0f));
@@ -148,7 +147,7 @@ void BenBocazStudioProAudioProcessor::processBlock(juce::AudioBuffer<float>& buf
         setLatencySamples(targetLatency);
     }
 
-    // 1. Vocal Mic Modeler (EQ suavizado; saturacion corre dentro de consoleChain en 4x/1x)
+    // 1. Vocal Mic Modeler (EQ y saturacion suave propia de la etapa vocal)
     const bool vocalOn = getVal("vocalModOn") > 0.5f;
     vocalModeler.setParameters(vocalOn,
                                static_cast<int>(getVal("vocalInMic")),
@@ -229,8 +228,8 @@ void BenBocazStudioProAudioProcessor::processBlock(juce::AudioBuffer<float>& buf
                          getVal("scFilter") > 0.5f,
                          static_cast<int>(getVal("circuit")),
                          getVal("drive"),
-                         vocalModeler.isActive(),
-                         vocalModeler.getSaturationDrive());
+                         false,
+                         0.0f);
 
     if (routing == 0)
         runChamber();
@@ -279,7 +278,7 @@ void BenBocazStudioProAudioProcessor::applyFactoryPreset(int presetIndex)
     auto setP = [this](const char* id, float val)
     {
         if (auto* param = apvts.getParameter(id))
-            param->setValueNotifyingHost(param->convertTo0to1(val));
+            param->setValue(param->convertTo0to1(val));
     };
 
     // Base limpia compartida

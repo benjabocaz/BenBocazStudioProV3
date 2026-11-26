@@ -44,10 +44,12 @@ class Studio4MicStagePad : public juce::Component, private juce::Timer
 public:
     explicit Studio4MicStagePad (BenBocazStudioProProcessor& proc);
 
-    void setShangriLaImage (const juce::Image& img) { shangriLaImg = img; repaint(); }
-    void setCanyonImage    (const juce::Image& img) { canyonImg = img; repaint(); }
-    void setSourceImage    (int idx, const juce::Image& img);
-    void setMicImage       (int idx, const juce::Image& img);
+    void setShangriLaImage    (const juce::Image& img) { shangriLaImg = img; repaint(); }
+    void setCanyonImage       (const juce::Image& img) { canyonImg = img; repaint(); }
+    void setVolcanoOpenImage  (const juce::Image& img) { volcanoOpenImg = img; repaint(); }
+    void setVolcanoClosedImage(const juce::Image& img) { volcanoClosedImg = img; repaint(); }
+    void setSourceImage       (int idx, const juce::Image& img);
+    void setMicImage          (int idx, const juce::Image& img);
 
     void paint (juce::Graphics& g) override;
     void mouseMove (const juce::MouseEvent& e) override;
@@ -88,6 +90,8 @@ private:
     juce::AudioProcessorValueTreeState& apvts;
     juce::Image shangriLaImg;
     juce::Image canyonImg;
+    juce::Image volcanoOpenImg;
+    juce::Image volcanoClosedImg;
     std::array<juce::Image, 7> sourceImgs; // 0..6
     std::array<juce::Image, 4> micImgs;    // 0: Main Mono, 1: Main X-Y, 2: Stereo Pair, 3: Decca
 

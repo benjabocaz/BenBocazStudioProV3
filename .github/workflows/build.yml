@@ -2,7 +2,8 @@ name: Build macOS Plugin
 
 on:
   push:
-    branches: [ main, master ]
+    branches:
+      - "**"
   workflow_dispatch:
 
 jobs:
@@ -10,7 +11,7 @@ jobs:
     runs-on: macos-15-intel
 
     steps:
-      - name: Checkout repository
+      - name: Checkout branch
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -34,5 +35,5 @@ jobs:
       - name: Upload plugin artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Los-Andes-Capital-macOS-arm64
+          name: Los-Andes-Capital-${{ github.ref_name }}-arm64
           path: artifacts/

@@ -172,6 +172,7 @@ juce::Image Studio4MicStagePad::removeGreenScreen(const juce::Image& src)
     juce::Image out = src.convertedToFormat(juce::Image::ARGB);
     juce::Image::BitmapData bd(out, juce::Image::BitmapData::readWrite);
 
+    int maxOpaqueY = 0;
     for (int y = 0; y < out.getHeight(); ++y)
     {
         for (int x = 0; x < out.getWidth(); ++x)
@@ -181,17 +182,26 @@ juce::Image Studio4MicStagePad::removeGreenScreen(const juce::Image& src)
             const int maxRB = std::max(r, b);
             const int greenExcess = g - maxRB;
 
-            if (greenExcess > 55 && g > 110)
+            if (greenExcess > 52 && g > 105)
                 bd.setPixelColour(x, y, juce::Colours::transparentBlack);
-            else if (greenExcess > 32 && g > 95)
+            else if (greenExcess > 28 && g > 90)
             {
-                const float alpha = 1.0f - std::clamp(static_cast<float>(greenExcess - 32) / 23.0f, 0.0f, 1.0f);
-                const uint8_t cleanG = static_cast<uint8_t>(std::min(g, maxRB + 10));
+                const float alpha = 1.0f - std::clamp(static_cast<float>(greenExcess - 28) / 24.0f, 0.0f, 1.0f);
+                const uint8_t cleanG = static_cast<uint8_t>(std::min(g, maxRB + 8));
                 bd.setPixelColour(x, y, juce::Colour::fromRGBA(static_cast<uint8_t>(r), cleanG, static_cast<uint8_t>(b),
                                                                static_cast<uint8_t>(alpha * 255.0f)));
+                if (alpha > 0.4f && y > maxOpaqueY) maxOpaqueY = y;
+            }
+            else if (c.getAlpha() > 128 && y > maxOpaqueY)
+            {
+                maxOpaqueY = y;
             }
         }
     }
+
+    if (maxOpaqueY > 10 && maxOpaqueY < out.getHeight() - 1)
+        return out.getClippedImage({ 0, 0, out.getWidth(), maxOpaqueY + 1 }).createCopy();
+
     return out;
 }
 
@@ -254,19 +264,31 @@ void Studio4MicStagePad::centerSelectedMic()
 
 juce::Point<float> Studio4MicStagePad::normToScreen(float nx, float ny, juce::Rectangle<float> area) const
 {
-    const float yTop = area.getY() + area.getHeight() * 0.56f;
-    const float yBot = area.getBottom() - area.getHeight() * 0.04f;
+    const int roomIdx = static_cast<int>(apvts.getRawParameterValue("room")->load());
+
+    float yTopF = 0.65f, yBotF = 0.96f, topW = 0.46f, botW = 0.80f;
+    if (roomIdx == 1)      { yTopF = 0.64f; yBotF = 0.96f; topW = 0.50f; botW = 0.78f; }
+    else if (roomIdx == 2) { yTopF = 0.66f; yBotF = 0.96f; topW = 0.48f; botW = 0.78f; }
+
+    const float yTop = area.getY() + area.getHeight() * yTopF;
+    const float yBot = area.getY() + area.getHeight() * yBotF;
     const float sy = yTop + ny * (yBot - yTop);
-    const float spread = 0.52f + 0.44f * ny;
+    const float spread = topW + (botW - topW) * ny;
     return { area.getCentreX() + (nx - 0.5f) * area.getWidth() * spread, sy };
 }
 
 juce::Point<float> Studio4MicStagePad::screenToNorm(juce::Point<float> pt, juce::Rectangle<float> area) const
 {
-    const float yTop = area.getY() + area.getHeight() * 0.56f;
-    const float yBot = area.getBottom() - area.getHeight() * 0.04f;
+    const int roomIdx = static_cast<int>(apvts.getRawParameterValue("room")->load());
+
+    float yTopF = 0.65f, yBotF = 0.96f, topW = 0.46f, botW = 0.80f;
+    if (roomIdx == 1)      { yTopF = 0.64f; yBotF = 0.96f; topW = 0.50f; botW = 0.78f; }
+    else if (roomIdx == 2) { yTopF = 0.66f; yBotF = 0.96f; topW = 0.48f; botW = 0.78f; }
+
+    const float yTop = area.getY() + area.getHeight() * yTopF;
+    const float yBot = area.getY() + area.getHeight() * yBotF;
     const float ny = std::clamp((pt.y - yTop) / std::max(1.0f, yBot - yTop), 0.05f, 0.95f);
-    const float spread = 0.52f + 0.44f * ny;
+    const float spread = topW + (botW - topW) * ny;
     const float nx = std::clamp(0.5f + (pt.x - area.getCentreX()) / std::max(1.0f, area.getWidth() * spread), 0.05f, 0.95f);
     return { nx, ny };
 }
@@ -323,14 +345,15 @@ void Studio4MicStagePad::paint(juce::Graphics& g)
     if (srcIdx == 0)      srcImg = &imgSrcVocals;
     else if (srcIdx == 1) srcImg = &imgSrcDrums;
     else if (srcIdx == 2) srcImg = &imgSrcBass;
-    else if (srcIdx == 3) srcImg = (mainSt && imgSrcGuitarStereo.isValid()) ? &imgSrcGuitarStereo : &imgSrcGuitarMono;
-    else if (srcIdx == 4) srcImg = &imgSrcEnsemble;
-    else if (srcIdx == 5) srcImg = &imgSrcMonitors;
+    else if (srcIdx == 3) srcImg = &imgSrcGuitarMono;
+    else if (srcIdx == 4) srcImg = &imgSrcGuitarStereo;
+    else if (srcIdx == 5) srcImg = &imgSrcEnsemble;
+    else if (srcIdx == 6) srcImg = &imgSrcMonitors;
 
-    const float floorLineY = area.getY() + area.getHeight() * 0.64f;
+    const float floorLineY = area.getY() + area.getHeight() * (roomIdx == 1 ? 0.66f : (roomIdx == 2 ? 0.68f : 0.67f));
     if (srcImg && srcImg->isValid())
     {
-        const float heightRatio = (srcIdx == 1) ? 0.35f : (srcIdx == 4 ? 0.34f : 0.30f);
+        const float heightRatio = (srcIdx == 1 || srcIdx == 5) ? 0.34f : 0.28f;
         const float sh = area.getHeight() * heightRatio;
         const float sw = sh * (static_cast<float>(srcImg->getWidth()) / std::max(1, srcImg->getHeight()));
         const float sx = area.getCentreX() - sw * 0.5f;
@@ -338,7 +361,7 @@ void Studio4MicStagePad::paint(juce::Graphics& g)
 
         g.setOpacity(1.0f);
         g.setColour(juce::Colour(0x660b0705));
-        g.fillEllipse(area.getCentreX() - sw * 0.45f, floorLineY - 5.0f, sw * 0.90f, 11.0f);
+        g.fillEllipse(area.getCentreX() - sw * 0.42f, floorLineY - 5.0f, sw * 0.84f, 10.0f);
         g.drawImage(*srcImg, juce::Rectangle<float>(sx, sy, sw, sh));
     }
 
@@ -359,7 +382,7 @@ void Studio4MicStagePad::paint(juce::Graphics& g)
         const float ny = apvts.getRawParameterValue(yIds[idx])->load();
         const float gain = apvts.getRawParameterValue(gIds[idx])->load();
         const auto pos = normToScreen(nx, ny, area);
-        const float micH = area.getHeight() * (0.22f + 0.25f * ny);
+        const float micH = area.getHeight() * (0.21f + 0.22f * ny);
 
         const juce::Image* micImg = nullptr;
         if (idx == 0)      micImg = mainSt ? &imgMicXY : &imgMicMono;
@@ -385,7 +408,7 @@ void Studio4MicStagePad::paint(juce::Graphics& g)
             const float ringW = 24.0f + 16.0f * ny;
             const float ringH = 8.0f + 5.0f * ny;
             g.setColour(juce::Colour(0xffffb84d));
-            g.drawEllipse(pos.x - ringW * 0.5f, pos.y - ringH * 0.5f, ringW, ringH, 2.0f);
+            g.drawEllipse(pos.x - ringW * 0.5f, pos.y - ringH * 0.5f - 2.0f, ringW, ringH, 2.0f);
         }
 
         const float distM = BenBocazDSP::AcousticEngine::computeDistanceMeters(roomIdx, nx, ny);
@@ -450,7 +473,7 @@ void Studio4MicStagePad::mouseDown(const juce::MouseEvent& e)
         const float nx = apvts.getRawParameterValue(xIds[i])->load();
         const float ny = apvts.getRawParameterValue(yIds[i])->load();
         const auto p = normToScreen(nx, ny, area);
-        const float micH = area.getHeight() * (0.22f + 0.25f * ny);
+        const float micH = area.getHeight() * (0.21f + 0.22f * ny);
 
         const float d = std::min(e.position.getDistanceFrom(p),
                                  e.position.getDistanceFrom(p.translated(0.0f, -micH * 0.45f)));
@@ -555,8 +578,11 @@ BenBocazStudioProAudioProcessorEditor::BenBocazStudioProAudioProcessorEditor(Ben
     updateHqButtonText();
 
     addToggle(btPhaseSafe, "phaseSafe");
+    btPhaseSafe.setButtonText("PHASE SAFE");
     addToggle(btPolarity, "polarityInv");
+    btPolarity.setButtonText("POLARITY INV");
     addToggle(btSnapCenter, "snapCenter");
+    btSnapCenter.setButtonText("SNAP CENTER");
     addToggle(btLink34, "link34");
     btLink34.setButtonText("LINK FAR L/R");
 
@@ -599,7 +625,15 @@ BenBocazStudioProAudioProcessorEditor::BenBocazStudioProAudioProcessorEditor(Ben
     addCombo(cbVocalTarget, "vocalTargetMic");
     addKnob(slVocalIn, "vocalInGain");   setupLabel(lbVocalIn, "MIC IN");
     addKnob(slVocalOut, "vocalOutGain"); setupLabel(lbVocalOut, "MIC OUT");
-    addCombo(cbSource, "source");        cbSource.onChange = [this]() { stagePad.repaint(); };
+    addCombo(cbSource, "source");
+    cbSource.onChange = [this]()
+    {
+        const int s = cbSource.getSelectedItemIndex();
+        const bool shouldBeStereo = (s == 1 || s == 4 || s == 5 || s == 6);
+        if (auto* p = processor.apvts.getParameter("mainStereo"))
+            p->setValueNotifyingHost(shouldBeStereo ? 1.0f : 0.0f);
+        stagePad.repaint();
+    };
     addCombo(cbMonitor, "monitorSpeaker");
     addCombo(cbRoom, "room");            cbRoom.onChange = [this]() { stagePad.repaint(); };
     addCombo(cbWalls, "walls");          cbWalls.onChange = [this]() { stagePad.repaint(); };

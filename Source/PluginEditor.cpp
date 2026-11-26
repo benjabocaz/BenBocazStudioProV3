@@ -299,9 +299,11 @@ juce::Point<float> Studio4MicStagePad::getStandBasePos (int idx, juce::Rectangle
     const float my = apvts.getRawParameterValue (pfx + "Y")->load();
     const int roomIdx = std::clamp (static_cast<int> (apvts.getRawParameterValue ("room")->load()), 0, 2);
 
-    const float yTopRatio = (roomIdx == 2) ? 0.72f : 0.75f;
+    // En Volcano (roomIdx == 2) la fuente va al fondo, así que permitimos llevar los mics más atrás (yTopRatio = 0.61f)
+    // con un trapecio lateral ajustado a la perspectiva del salón
+    const float yTopRatio = (roomIdx == 2) ? 0.61f : 0.75f;
     const float yBotPad   = (roomIdx == 2) ? 12.0f : 14.0f;
-    const float backHalfW = (roomIdx == 2) ? 0.21f : 0.30f;
+    const float backHalfW = (roomIdx == 2) ? 0.17f : 0.30f;
     const float frontHalfW = 0.43f;
 
     const float yTop  = area.getY() + area.getHeight() * yTopRatio;
@@ -316,19 +318,18 @@ float Studio4MicStagePad::getStandScale (int idx) const
 {
     const float my = apvts.getRawParameterValue ("mic" + juce::String (idx + 1) + "Y")->load();
     const int roomIdx = std::clamp (static_cast<int> (apvts.getRawParameterValue ("room")->load()), 0, 2);
-    const float minScale = (roomIdx == 2) ? 0.72f : 0.78f;
+    const float minScale = (roomIdx == 2) ? 0.62f : 0.78f;
     const float maxScale = (roomIdx == 2) ? 1.18f : 1.20f;
     return juce::jmap (my, 0.0f, 1.0f, minScale, maxScale);
 }
 
 float Studio4MicStagePad::getStandVisualHeight (int idx, float scale) const
 {
-    // Alturas diferenciadas según el rol de cada atril:
-    // 0: MAIN (enfocado), 1: MID (medio), 2: AIR (alto/esbelto), 3: DECCA (árbol imponente)
-    static constexpr std::array<float, 4> baseHeights { 116.0f, 132.0f, 162.0f, 148.0f };
+    // Alturas diferenciadas:
+    // 0: MAIN, 1: ROOM PAIR (par estéreo de sala), 2: FAR L, 3: FAR R
+    static constexpr std::array<float, 4> baseHeights { 116.0f, 146.0f, 134.0f, 134.0f };
     const float baseH = baseHeights[static_cast<size_t> (std::clamp (idx, 0, 3))];
 
-    // Escala proporcional al tamaño del escenario (se ve bien tanto en vista normal como en Expand Stage)
     const float padFactor = std::clamp (static_cast<float> (getHeight()) / 360.0f, 0.88f, 1.48f);
     return baseH * scale * padFactor;
 }
@@ -338,7 +339,7 @@ juce::Rectangle<float> Studio4MicStagePad::getStandTagRect (int idx, juce::Recta
     const auto base = getStandBasePos (idx, area);
     const float sc  = getStandScale (idx);
     const float vh  = getStandVisualHeight (idx, sc);
-    const float tagW = (idx == 0) ? 102.0f : 80.0f;
+    const float tagW = (idx == 0) ? 102.0f : 86.0f;
     const float tagY = std::max (area.getY() + 26.0f, base.y - vh - 14.0f);
     return { base.x - tagW * 0.5f, tagY, tagW, 15.0f };
 }
@@ -463,33 +464,33 @@ void Studio4MicStagePad::drawTipsOverlay (juce::Graphics& g, juce::Rectangle<flo
     };
 
     static const std::array<juce::String, 7> bodies {
-        "1. Single Mic Anchor: 1:MAIN Mono centered close, MID/AIR/DECCA at 0.\n"
-        "2. Air & Intimacy: 1:MAIN close + 3:AIR soft at rear for natural halo.\n"
-        "3. Open Room Depth: Move 1:MAIN back with PHASE SAFE + short Chamber.",
+        "1. Single Mic Anchor: 1:MAIN Mono centered close, ROOM PAIR & FAR at 0.\n"
+        "2. Room & Depth: 1:MAIN close + 2:ROOM PAIR at mid distance for natural air.\n"
+        "3. Wide Hall Depth: Move 1:MAIN back + enable LINK 3+4 with FAR L/R.",
 
         "1. Coincident Overhead: 1:MAIN X-Y centered for punchy kit focus.\n"
-        "2. Studio Room Punch: 2:MID close/mid + 3:AIR wide for cymbals.\n"
-        "3. Bonham Huge Room: Add 4:DECCA far back + Parallel Crush on Room Mics.",
+        "2. Studio Room Punch: 2:ROOM PAIR with PAIR WIDE open for cymbals.\n"
+        "3. Huge Live Room: Add LINK 3+4 (FAR L/R) + Parallel Crush on Room Mics.",
 
         "1. Single Acoustic Photo: 1:MAIN X-Y centered at medium distance.\n"
-        "2. Wood Width: 1:MAIN anchor + 2:MID / 3:AIR spaced pair.\n"
-        "3. Orchestral Depth: 1:MAIN + 4:DECCA wide at rear for 3D tail.",
+        "2. Wood Width: 1:MAIN anchor + 2:ROOM PAIR spaced for warmth.\n"
+        "3. Deep Hall Tail: 1:MAIN + LINK 3+4 (FAR L/R) wide at the sides.",
 
         "1. Reference Focus: 1:MAIN centered to capture direct speaker punch.\n"
-        "2. Controlled Room: 1:MAIN X-Y + 2:MID low for natural wall bounce.\n"
-        "3. Swedien Wide Stage: Push 2:MID + 3:AIR / 4:DECCA for lush spread.",
+        "2. Controlled Room: 1:MAIN X-Y + 2:ROOM PAIR low for natural wall bounce.\n"
+        "3. Wide Stage: Push 2:ROOM PAIR + LINK 3+4 (FAR L/R) for lush spread.",
 
         "1. Cone Edge Bite: 1:MAIN Mono close & centered for tight riffs.\n"
-        "2. Amp + Room Air: 1:MAIN close + 3:AIR far back for organic body.\n"
-        "3. Symmetrical Depth: Enable LINK 3+4 with AIR & DECCA mirrored.",
+        "2. Cab + Room Air: 1:MAIN close + 2:ROOM PAIR for organic wood body.\n"
+        "3. Symmetrical Depth: Enable LINK 3+4 with FAR L/R mirrored.",
 
         "1. Stereo Cab Capture: 1:MAIN X-Y centered to preserve chorus/delay.\n"
-        "2. Wide A/B Stage: 2:MID + 3:AIR with PAIR WIDE open on both cabs.\n"
-        "3. Huge Live Wall: Add 4:DECCA at rear + Chamber 3 for 3D width.",
+        "2. Wide Pair Stage: 2:ROOM PAIR with PAIR WIDE open on both cabs.\n"
+        "3. Huge Live Wall: Add LINK 3+4 (FAR L/R) + Chamber 3 for 3D width.",
 
         "1. Sub Core Anchor: 1:MAIN Mono close/center, ambient mics low.\n"
-        "2. Growl + Wood Body: 1:MAIN + 2:MID with EQ HPF around 40-50Hz.\n"
-        "3. Warm Room Weight: Subtle 4:DECCA far back with PHASE SAFE locked."
+        "2. Growl + Wood Body: 1:MAIN + 2:ROOM PAIR with EQ HPF around 40-50Hz.\n"
+        "3. Warm Room Weight: Subtle LINK 3+4 (FAR L/R) with PHASE SAFE locked."
     };
 
     const size_t idx = static_cast<size_t> (std::clamp (sourceIdx, 0, 6));
@@ -515,7 +516,7 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     const bool phaseOk    = apvts.getRawParameterValue ("phaseAlign")->load() >= 0.5f;
     const bool mainStereo = apvts.getRawParameterValue ("mainStereo")->load() >= 0.5f;
     const float pairW     = apvts.getRawParameterValue ("pairSpread")->load();
-    const float deccaW    = apvts.getRawParameterValue ("deccaWidth")->load();
+    const float farW      = apvts.getRawParameterValue ("deccaWidth")->load();
 
     juce::Path clip;
     clip.addRoundedRectangle (area, 6.0f);
@@ -529,16 +530,14 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
             activeRoom = volcanoOpenImg.isValid() ? volcanoOpenImg : volcanoClosedImg;
         else
             activeRoom = volcanoClosedImg.isValid() ? volcanoClosedImg : volcanoOpenImg;
-        if (! activeRoom.isValid())
-            activeRoom = shangriLaImg.isValid() ? shangriLaImg : canyonImg;
     }
     else if (roomIdx == 1)
     {
-        activeRoom = canyonImg.isValid() ? canyonImg : (shangriLaImg.isValid() ? shangriLaImg : volcanoOpenImg);
+        activeRoom = canyonImg.isValid() ? canyonImg : shangriLaImg;
     }
     else
     {
-        activeRoom = shangriLaImg.isValid() ? shangriLaImg : (canyonImg.isValid() ? canyonImg : volcanoOpenImg);
+        activeRoom = shangriLaImg.isValid() ? shangriLaImg : canyonImg;
     }
 
     if (activeRoom.isValid())
@@ -550,8 +549,8 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     }
     else
     {
-        juce::ColourGradient wood (roomIdx == 0 ? juce::Colour (0xff4a311e) : juce::Colour (0xff2e1c11), area.getTopLeft(),
-                                   juce::Colour (0xff170f0a), area.getBottomRight(), false);
+        juce::ColourGradient wood (roomIdx == 2 ? juce::Colour (0xff3d2414) : (roomIdx == 0 ? juce::Colour (0xff4a311e) : juce::Colour (0xff2e1c11)),
+                                   area.getTopLeft(), juce::Colour (0xff170f0a), area.getBottomRight(), false);
         g.setGradientFill (wood);
         g.fillRect (area);
     }
@@ -563,16 +562,17 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     const bool isCanyon  = (roomIdx == 1);
     const bool isVolcano = (roomIdx == 2);
 
+    // En Volcano (Open y Closed) llevamos los instrumentos más al fondo del salón
     float floorRatio = 0.70f;
     if (isCanyon)
         floorRatio = isCabinetSource ? 0.725f : 0.735f;
     else if (isVolcano)
-        floorRatio = isCabinetSource ? 0.712f : 0.722f;
+        floorRatio = isCabinetSource ? 0.580f : 0.590f;
     else
         floorRatio = isCabinetSource ? 0.690f : 0.700f;
 
     const float srcFloorY = area.getY() + area.getHeight() * floorRatio;
-    const float roomScale = isCanyon ? 0.88f : (isVolcano ? 0.95f : 1.04f);
+    const float roomScale = isCanyon ? 0.88f : (isVolcano ? 0.66f : 1.04f);
 
     g.setColour (juce::Colours::black.withAlpha (0.48f * stageAlpha));
     g.fillEllipse (srcFloorX - 66.0f * roomScale, srcFloorY - 7.0f, 132.0f * roomScale, 16.0f);
@@ -581,8 +581,8 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     const auto& srcImg = sourceImgs[sIdx];
     if (srcImg.isValid())
     {
-        // Proporciones coherentes con los amplis ubicados más al fondo de la sala
-        static constexpr std::array<float, 7> srcHeightRatios { 0.33f, 0.36f, 0.37f, 0.31f, 0.25f, 0.23f, 0.29f };
+        // Solo guitar_mono (idx 4) se reduce respecto al tamaño anterior; guitar_stereo (idx 5) mantiene su escala
+        static constexpr std::array<float, 7> srcHeightRatios { 0.33f, 0.36f, 0.37f, 0.31f, 0.17f, 0.23f, 0.29f };
         const float drawH  = area.getHeight() * srcHeightRatios[sIdx] * roomScale;
         const float aspect = static_cast<float> (srcImg.getWidth()) / std::max (1.0f, static_cast<float> (srcImg.getHeight()));
         const float drawW  = drawH * aspect;
@@ -623,7 +623,7 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
         {
             const auto p3 = getStandBasePos (2, area);
             const auto p4 = getStandBasePos (3, area);
-            g.setColour (juce::Colour (0xff8fc7e8).withAlpha (0.45f));
+            g.setColour (juce::Colour (0xff8fc7e8).withAlpha (0.52f));
             float dash[2] = { 4.0f, 4.0f };
             g.drawDashedLine (juce::Line<float> (p3, p4), dash, 2, 1.3f);
         }
@@ -637,7 +637,7 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
         return ya < yb;
     });
 
-    static const std::array<juce::String, 4> baseNames { "MAIN", "MID", "AIR", "DECCA" };
+    static const std::array<juce::String, 4> baseNames { "MAIN", "ROOM PAIR", "FAR L", "FAR R" };
     static const std::array<juce::Colour, 4> cols {
         juce::Colour (0xfff2b24c),
         juce::Colour (0xffe07a52),
@@ -682,21 +682,24 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
         int micSpriteIdx = 0;
         float widthStretch = 1.0f;
         if (idx == 0)
+        {
             micSpriteIdx = mainStereo ? 1 : 0;
-        else if (idx == 1 || idx == 2)
+        }
+        else if (idx == 1)
         {
             micSpriteIdx = (pairW < 0.08f) ? 0 : 2;
             widthStretch = (pairW < 0.08f) ? 0.92f : juce::jmap (pairW, 0.08f, 1.5f, 0.68f, 1.32f);
         }
         else
         {
-            micSpriteIdx = 3;
-            widthStretch = juce::jmap (deccaW, 0.2f, 1.5f, 0.70f, 1.35f);
+            // FAR L y FAR R son dos micrófonos individuales lejanos
+            micSpriteIdx = 0;
+            widthStretch = 0.95f;
         }
 
         const auto& mImg = micImgs[static_cast<size_t> (micSpriteIdx)];
 
-        const float ringR = (idx == 3 ? 21.0f : 16.0f) * sc;
+        const float ringR = (idx >= 2 ? 15.0f : 16.0f) * sc;
         g.setColour (col.withAlpha ((active ? 0.26f : 0.14f) * alpha));
         g.fillEllipse (headX - ringR, headY - ringR, ringR * 2.0f, ringR * 2.0f);
         g.setColour (col.withAlpha ((active ? 0.92f : 0.65f) * alpha));
@@ -851,9 +854,9 @@ void Studio4MicStagePad::mouseUp (const juce::MouseEvent& e)
 void Studio4MicStagePad::updateStandFromBasePoint (int idx, juce::Point<float> targetBase, juce::Rectangle<float> area)
 {
     const int roomIdx = std::clamp (static_cast<int> (apvts.getRawParameterValue ("room")->load()), 0, 2);
-    const float yTopRatio = (roomIdx == 2) ? 0.72f : 0.75f;
+    const float yTopRatio = (roomIdx == 2) ? 0.61f : 0.75f;
     const float yBotPad   = (roomIdx == 2) ? 12.0f : 14.0f;
-    const float backHalfW = (roomIdx == 2) ? 0.21f : 0.30f;
+    const float backHalfW = (roomIdx == 2) ? 0.17f : 0.30f;
     const float frontHalfW = 0.43f;
 
     const float yTop = area.getY() + area.getHeight() * yTopRatio;
@@ -1007,14 +1010,14 @@ BenBocazStudioProEditor::BenBocazStudioProEditor (BenBocazStudioProProcessor& p)
     setupKnob (vocalOutSlider,   vocalOutLbl,   "MIC OUT");
     setupKnob (driveSlider,      driveLbl,      "TUBE / TAPE DRIVE");
 
-    setupStandKnob (mic1GainSlider, mic1SelBtn, "1: MAIN",  0);
-    setupStandKnob (mic2GainSlider, mic2SelBtn, "2: MID",   1);
-    setupStandKnob (mic3GainSlider, mic3SelBtn, "3: AIR",   2);
-    setupStandKnob (mic4GainSlider, mic4SelBtn, "4: DECCA", 3);
+    setupStandKnob (mic1GainSlider, mic1SelBtn, "1: MAIN",      0);
+    setupStandKnob (mic2GainSlider, mic2SelBtn, "2: ROOM PAIR", 1);
+    setupStandKnob (mic3GainSlider, mic3SelBtn, "3: FAR L",     2);
+    setupStandKnob (mic4GainSlider, mic4SelBtn, "4: FAR R",     3);
     updateSelectedStandButtonsUI (0);
 
     setupKnob (pairWidthSlider,  pairWidthLbl,  "PAIR WIDE");
-    setupKnob (deccaWidthSlider, deccaWidthLbl, "DECCA WIDE");
+    setupKnob (deccaWidthSlider, deccaWidthLbl, "FAR WIDE");
     setupKnob (chMixSlider,      chMixLbl,      "SEND");
     setupKnob (chDecaySlider,    chDecayLbl,    "DECAY");
     setupKnob (chPreSlider,      chPreLbl,      "PRE-DELAY");

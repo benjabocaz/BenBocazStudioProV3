@@ -1,9 +1,11 @@
 #pragma once
+
 #include <juce_audio_processors/juce_audio_processors.h>
-#include "DSP/AnalogModules.h"
+#include <atomic>
+#include <array>
 #include "DSP/VocalMicModeler.h"
 #include "DSP/AcousticEngine.h"
-#include <atomic>
+#include "DSP/AnalogModules.h"
 
 class BenBocazStudioProAudioProcessor : public juce::AudioProcessor
 {
@@ -14,6 +16,7 @@ public:
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
     bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
+
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
@@ -23,7 +26,7 @@ public:
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 3.5; }
+    double getTailLengthSeconds() const override { return 3.0; }
 
     int getNumPrograms() override { return 6; }
     int getCurrentProgram() override { return currentPresetIndex; }
@@ -36,15 +39,16 @@ public:
 
     void applyFactoryPreset(int presetIndex);
 
-    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     juce::AudioProcessorValueTreeState apvts;
 
-    // Medidores atomicos para la UI
     std::atomic<float> vuOutDb { -60.0f };
     std::atomic<float> vuGrDb  { 0.0f };
 
 private:
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+
     BenBocazDSP::VocalMicModeler vocalModeler;
+    BenBocazDSP::SourceAndMonitorModeler sourceModeler;
     BenBocazDSP::OversampledConsoleChain consoleChain;
     BenBocazDSP::AcousticEngine acousticEngine;
     BenBocazDSP::VintageCompressor parallelComp;
@@ -53,8 +57,9 @@ private:
     juce::AudioBuffer<float> parCrushBuffer;
 
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> outGainSmooth;
+
     int currentPresetIndex = 0;
-    int lastReportedLatency = -1;
+    int lastReportedLatency = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BenBocazStudioProAudioProcessor)
 };

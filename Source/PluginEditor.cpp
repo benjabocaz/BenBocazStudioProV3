@@ -274,6 +274,17 @@ void Studio4MicStagePad::setMicImage (int idx, const juce::Image& img)
     }
 }
 
+void Studio4MicStagePad::setFarMicImage (int idx, const juce::Image& img)
+{
+    if (idx >= 0 && idx < 2)
+    {
+        juce::Image copy = img;
+        removeGreenScreen (copy, false);
+        farMicImgs[static_cast<size_t> (idx)] = copy;
+        repaint();
+    }
+}
+
 void Studio4MicStagePad::setSelectedStand (int idx)
 {
     const int clamped = std::clamp (idx, 0, 3);
@@ -299,8 +310,6 @@ juce::Point<float> Studio4MicStagePad::getStandBasePos (int idx, juce::Rectangle
     const float my = apvts.getRawParameterValue (pfx + "Y")->load();
     const int roomIdx = std::clamp (static_cast<int> (apvts.getRawParameterValue ("room")->load()), 0, 2);
 
-    // En Volcano (roomIdx == 2) la fuente va al fondo, así que permitimos llevar los mics más atrás (yTopRatio = 0.61f)
-    // con un trapecio lateral ajustado a la perspectiva del salón
     const float yTopRatio = (roomIdx == 2) ? 0.61f : 0.75f;
     const float yBotPad   = (roomIdx == 2) ? 12.0f : 14.0f;
     const float backHalfW = (roomIdx == 2) ? 0.17f : 0.30f;
@@ -325,8 +334,6 @@ float Studio4MicStagePad::getStandScale (int idx) const
 
 float Studio4MicStagePad::getStandVisualHeight (int idx, float scale) const
 {
-    // Alturas diferenciadas:
-    // 0: MAIN, 1: ROOM PAIR (par estéreo de sala), 2: FAR L, 3: FAR R
     static constexpr std::array<float, 4> baseHeights { 116.0f, 146.0f, 134.0f, 134.0f };
     const float baseH = baseHeights[static_cast<size_t> (std::clamp (idx, 0, 3))];
 
@@ -516,7 +523,6 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     const bool phaseOk    = apvts.getRawParameterValue ("phaseAlign")->load() >= 0.5f;
     const bool mainStereo = apvts.getRawParameterValue ("mainStereo")->load() >= 0.5f;
     const float pairW     = apvts.getRawParameterValue ("pairSpread")->load();
-    const float farW      = apvts.getRawParameterValue ("deccaWidth")->load();
 
     juce::Path clip;
     clip.addRoundedRectangle (area, 6.0f);
@@ -562,7 +568,6 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     const bool isCanyon  = (roomIdx == 1);
     const bool isVolcano = (roomIdx == 2);
 
-    // En Volcano (Open y Closed) llevamos los instrumentos más al fondo del salón
     float floorRatio = 0.70f;
     if (isCanyon)
         floorRatio = isCabinetSource ? 0.725f : 0.735f;
@@ -581,14 +586,13 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     const auto& srcImg = sourceImgs[sIdx];
     if (srcImg.isValid())
     {
-        // Solo guitar_mono (idx 4) se reduce respecto al tamaño anterior; guitar_stereo (idx 5) mantiene su escala
         static constexpr std::array<float, 7> srcHeightRatios { 0.33f, 0.36f, 0.37f, 0.31f, 0.17f, 0.23f, 0.29f };
         const float drawH  = area.getHeight() * srcHeightRatios[sIdx] * roomScale;
         const float aspect = static_cast<float> (srcImg.getWidth()) / std::max (1.0f, static_cast<float> (srcImg.getHeight()));
         const float drawW  = drawH * aspect;
         float yNudge = isCabinetSource ? 6.0f : 8.0f;
         if (sourceIdx == 5)
-            yNudge += drawH * 0.16f; // Compensa el 16% recortado en la base de Guitar Cab (Stereo)
+            yNudge += drawH * 0.16f;
 
         juce::Rectangle<float> srcDest (srcFloorX - drawW * 0.5f, srcFloorY - drawH + yNudge, drawW, drawH);
         g.setOpacity (stageAlpha);
@@ -679,25 +683,26 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
         g.setColour (col.withAlpha ((active ? 0.95f : 0.58f) * alpha));
         g.drawEllipse (base.x - haloRx, base.y - haloRy, haloRx * 2.0f, haloRy * 2.0f, active ? 1.8f : 1.1f);
 
-        int micSpriteIdx = 0;
+        juce::Image mImg;
         float widthStretch = 1.0f;
         if (idx == 0)
         {
-            micSpriteIdx = mainStereo ? 1 : 0;
+            mImg = micImgs[static_cast<size_t> (mainStereo ? 1 : 0)];
         }
         else if (idx == 1)
         {
-            micSpriteIdx = (pairW < 0.08f) ? 0 : 2;
+            const int micSpriteIdx = (pairW < 0.08f) ? 0 : 2;
+            mImg = micImgs[static_cast<size_t> (micSpriteIdx)];
             widthStretch = (pairW < 0.08f) ? 0.92f : juce::jmap (pairW, 0.08f, 1.5f, 0.68f, 1.32f);
+        }
+        else if (idx == 2)
+        {
+            mImg = farMicImgs[0].isValid() ? farMicImgs[0] : micImgs[0];
         }
         else
         {
-            // FAR L y FAR R son dos micrófonos individuales lejanos
-            micSpriteIdx = 0;
-            widthStretch = 0.95f;
+            mImg = farMicImgs[1].isValid() ? farMicImgs[1] : micImgs[0];
         }
-
-        const auto& mImg = micImgs[static_cast<size_t> (micSpriteIdx)];
 
         const float ringR = (idx >= 2 ? 15.0f : 16.0f) * sc;
         g.setColour (col.withAlpha ((active ? 0.26f : 0.14f) * alpha));
@@ -919,6 +924,7 @@ BenBocazStudioProEditor::BenBocazStudioProEditor (BenBocazStudioProProcessor& p)
     snapCenterBtn.onClick = [this] { roomPad.setSnapToCenter (snapCenterBtn.getToggleState()); };
     addAndMakeVisible (snapCenterBtn);
 
+    link34Btn.setToggleState (true, juce::dontSendNotification);
     link34Btn.onClick = [this] { roomPad.setLinkAirDecca (link34Btn.getToggleState()); };
     addAndMakeVisible (link34Btn);
 
@@ -1015,6 +1021,27 @@ BenBocazStudioProEditor::BenBocazStudioProEditor (BenBocazStudioProProcessor& p)
     setupStandKnob (mic3GainSlider, mic3SelBtn, "3: FAR L",     2);
     setupStandKnob (mic4GainSlider, mic4SelBtn, "4: FAR R",     3);
     updateSelectedStandButtonsUI (0);
+
+    auto syncFarGain = [this] (int srcStand, int dstStand, juce::Slider& dstSlider)
+    {
+        if (syncingFarGains || ! link34Btn.getToggleState()) return;
+        syncingFarGains = true;
+        const juce::String srcId = "mic" + juce::String (srcStand + 1) + "Gain";
+        const juce::String dstId = "mic" + juce::String (dstStand + 1) + "Gain";
+        if (auto* pSrc = audioProcessor.apvts.getParameter (srcId))
+        {
+            if (auto* pDst = audioProcessor.apvts.getParameter (dstId))
+            {
+                const float normVal = pSrc->getValue();
+                pDst->setValueNotifyingHost (normVal);
+                dstSlider.setValue (pDst->convertFrom0to1 (normVal), juce::dontSendNotification);
+            }
+        }
+        syncingFarGains = false;
+    };
+
+    mic3GainSlider.onValueChange = [this, syncFarGain] { syncFarGain (2, 3, mic4GainSlider); };
+    mic4GainSlider.onValueChange = [this, syncFarGain] { syncFarGain (3, 2, mic3GainSlider); };
 
     setupKnob (pairWidthSlider,  pairWidthLbl,  "PAIR WIDE");
     setupKnob (deccaWidthSlider, deccaWidthLbl, "FAR WIDE");
@@ -1210,6 +1237,10 @@ void BenBocazStudioProEditor::loadEmbeddedImages()
                 roomPad.setSourceImage (5, img);
             else if (resName.containsIgnoreCase ("bass"))
                 roomPad.setSourceImage (6, img);
+            else if (resName.containsIgnoreCase ("far_l"))
+                roomPad.setFarMicImage (0, img);
+            else if (resName.containsIgnoreCase ("far_r"))
+                roomPad.setFarMicImage (1, img);
             else if (resName.containsIgnoreCase ("main_mono"))
                 roomPad.setMicImage (0, img);
             else if (resName.containsIgnoreCase ("main_xy"))

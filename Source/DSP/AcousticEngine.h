@@ -122,7 +122,7 @@ struct MultiMicRoomConfig
     bool phaseInvert = false;
     bool mainStereo = false;
     bool deMudOn = false;
-    int soloStandIdx = -1; // -1: Ninguno, 0..3: Solo atril específico
+    int soloStandIdx = -1; // -1: Ninguno, 0..3: Solo atril específico (0: MAIN, 1: ROOM PAIR, 2: FAR L, 3: FAR R)
     float pairSpread = 1.0f;
     float deccaWidth = 1.0f;
 
@@ -159,9 +159,9 @@ public:
         roomAmbComp.prepare (sr);
         chamberAmbComp.prepare (sr);
 
-        midPhaseHpf.prepare (sr);   midPhaseHpf.setHighPass (105.0f, 0.7071f);
-        airPhaseHpf.prepare (sr);   airPhaseHpf.setHighPass (165.0f, 0.7071f);
-        deccaPhaseHpf.prepare (sr); deccaPhaseHpf.setHighPass (90.0f, 0.7071f);
+        midPhaseHpf.prepare (sr);   midPhaseHpf.setHighPass (115.0f, 0.7071f);
+        airPhaseHpf.prepare (sr);   airPhaseHpf.setHighPass (155.0f, 0.7071f);
+        deccaPhaseHpf.prepare (sr); deccaPhaseHpf.setHighPass (95.0f, 0.7071f);
 
         // Filtros dedicados para la Sala (interpolados suavemente para evitar zipper)
         roomLowShelf.prepare (sr);
@@ -327,14 +327,11 @@ public:
             targetGain[s] = mutedBySolo ? 0.0f : cfg.micGain[s];
             targetMicY[s] = cfg.micY[s];
 
-            // Posición física real dentro de la sala: eje X lateral (con leve estrechamiento hacia el fondo),
-            // eje Y desde 0.35m cerca de la fuente hasta roomD - 1.5m al fondo.
             const float depthFactor = juce::jmap (cfg.micY[s], 0.0f, 1.0f, 0.55f, 1.0f);
             const float mx = cfg.micX[s] * (roomW * 0.42f) * depthFactor;
             const float my = juce::jmap (cfg.micY[s], 0.0f, 1.0f, 0.35f, roomD - 1.5f);
             distMeters[s] = std::hypot (mx, my);
 
-            // Ley de atenuación física suavizada respecto a 1m de referencia
             const float atten = 1.0f / (1.0f + 0.14f * std::max (0.0f, distMeters[s] - 0.5f));
             targetDirWeight[s] = atten;
             targetAmbWeight[s] = std::clamp (0.18f + (distMeters[s] / std::max (1.0f, roomD)) * 0.85f, 0.15f, 1.25f);
@@ -345,7 +342,7 @@ public:
             targetPanR[s] = std::sin (ang) * 1.414f;
         }
 
-        // Retardo base de 1:MAIN y retardos físicos coherentes para 2:MID, 3:AIR y 4:DECCA
+        // Retardo base de 1:MAIN y retardos físicos coherentes para 2:ROOM PAIR, 3:FAR L y 4:FAR R
         const float mainDelaySamples = (distMeters[0] / speed) * static_cast<float> (sr);
         targetDelay[0] = mainDelaySamples;
 
@@ -357,7 +354,7 @@ public:
             targetDelay[s] = mainDelaySamples + relSec * static_cast<float> (sr);
         }
 
-        const float targetDeccaOffset = juce::jmap (cfg.deccaWidth, 0.2f, 1.5f, 0.0008f, 0.0085f) * static_cast<float> (sr);
+        const float targetFarOffset = juce::jmap (cfg.deccaWidth, 0.2f, 1.5f, 0.0008f, 0.0085f) * static_cast<float> (sr);
 
         if (! smoothInitialized)
         {
@@ -368,7 +365,7 @@ public:
             smMicY  = targetMicY;
             smDirWeight = targetDirWeight;
             smAmbWeight = targetAmbWeight;
-            smDeccaOffset = targetDeccaOffset;
+            smDeccaOffset = targetFarOffset;
             smLowDb = targetLowDb;
             smMidDb = targetMidDb;
             smHighDb = targetHighDb;
@@ -378,7 +375,6 @@ public:
             smoothInitialized = true;
         }
 
-        // Reflexiones tempranas asimétricas y escalonadas (paredes, techo/vigas y fondo)
         const float roomScaleEr = (rIdx == 0) ? 1.12f : ((rIdx == 1) ? 0.82f : 1.32f);
         const float openErScale = (rIdx == 2 && ! wLive) ? 0.84f : 1.0f;
         const size_t erSideL = static_cast<size_t> (0.0112f * roomScaleEr * openErScale * sr);
@@ -389,10 +385,9 @@ public:
         const size_t erBackR = static_cast<size_t> (0.0368f * roomScaleEr * openErScale * sr);
 
         const float pairW = std::clamp (cfg.pairSpread, 0.0f, 1.5f);
-        const float deccaW = std::clamp (cfg.deccaWidth, 0.2f, 1.5f);
+        const float farW  = std::clamp (cfg.deccaWidth, 0.2f, 1.5f);
         const float polaritySign = cfg.phaseInvert ? -1.0f : 1.0f;
 
-        // Absorción de aire en altas frecuencias según sala y estado
         const float airMaxCoeff = (rIdx == 2) ? (wLive ? 0.44f : 0.62f)
                                               : ((rIdx == 1) ? 0.56f : 0.52f);
         const float airMinCoeff = (rIdx == 2) ? (wLive ? 0.12f : 0.24f) : 0.16f;
@@ -414,7 +409,7 @@ public:
                 smDirWeight[s] += smoothCoeff * (targetDirWeight[s] - smDirWeight[s]);
                 smAmbWeight[s] += smoothCoeff * (targetAmbWeight[s] - smAmbWeight[s]);
             }
-            smDeccaOffset += smoothCoeff * (targetDeccaOffset - smDeccaOffset);
+            smDeccaOffset += smoothCoeff * (targetFarOffset - smDeccaOffset);
 
             const float nextLow  = smLowDb  + smoothCoeff * (targetLowDb  - smLowDb);
             const float nextMid  = smMidDb  + smoothCoeff * (targetMidDb  - smMidDb);
@@ -493,14 +488,20 @@ public:
                 mainR += sR * smPanR[0] * g;
             }
 
-            // ATRIL 2: MID
+            // ATRIL 2: ROOM PAIR (combina par de sala medio + aire con apertura PAIR WIDE)
             if (smGain[1] > 0.0005f)
             {
-                const float g = smGain[1] * 0.78f * smDirWeight[1];
+                const float g = smGain[1] * 0.80f * smDirWeight[1];
                 const float yDist = smMicY[1];
                 const float ambW = smAmbWeight[1];
-                float mL = (readFrac (erBufL, smDelay[1]) * (1.0f - yDist * 0.55f) * 0.45f + (erL * 0.85f + fdnL * 0.65f) * ambW);
-                float mR = (readFrac (erBufR, smDelay[1]) * (1.0f - yDist * 0.55f) * 0.45f + (erR * 0.85f + fdnR * 0.65f) * ambW);
+                float mL = readFrac (erBufL, smDelay[1]) * (1.0f - yDist * 0.55f) * 0.35f + (erL * 0.75f + fdnL * 0.95f) * ambW;
+                float mR = readFrac (erBufR, smDelay[1]) * (1.0f - yDist * 0.55f) * 0.35f + (erR * 0.75f + fdnR * 0.95f) * ambW;
+
+                const float pairAirCoeff = juce::jmap (yDist, 0.0f, 1.0f, airMinCoeff * 0.85f, airMaxCoeff * 0.9f);
+                airLpL = mL * (1.0f - pairAirCoeff) + airLpL * pairAirCoeff;
+                airLpR = mR * (1.0f - pairAirCoeff) + airLpR * pairAirCoeff;
+                mL = airLpL;
+                mR = airLpR;
 
                 if (cfg.phaseSafe)
                 {
@@ -514,54 +515,48 @@ public:
                 ambR += (mid - side) * smPanR[1] * g;
             }
 
-            // ATRIL 3: AIR (absorción de aire natural más marcada a mayor distancia)
+            // ATRIL 3: FAR L (micrófono lejano izquierdo con apertura FAR WIDE)
             if (smGain[2] > 0.0005f)
             {
-                const float g = smGain[2] * 0.82f * smDirWeight[2];
+                const float g = smGain[2] * 0.76f * smDirWeight[2];
                 const float ambW = smAmbWeight[2];
-                float aL = readFrac (erBufL, smDelay[2]) * 0.25f + (erL * 0.55f + fdnL * 1.15f) * ambW;
-                float aR = readFrac (erBufR, smDelay[2]) * 0.25f + (erR * 0.55f + fdnR * 1.15f) * ambW;
-
-                const float airCoeff = juce::jmap (smMicY[2], 0.0f, 1.0f, airMinCoeff, airMaxCoeff);
-                airLpL = aL * (1.0f - airCoeff) + airLpL * airCoeff;
-                airLpR = aR * (1.0f - airCoeff) + airLpR * airCoeff;
-                aL = airLpL; aR = airLpR;
+                const float dFarL = smDelay[2] + smDeccaOffset * 0.5f;
+                float fL = readFrac (erBufL, dFarL) * 0.22f + (erL * 0.78f + fdnL * 0.95f) * ambW;
+                float fR = readFrac (erBufR, dFarL) * 0.22f + (erR * 0.42f + fdnR * 0.55f) * ambW;
 
                 if (cfg.phaseSafe)
                 {
-                    aL = airPhaseHpf.processSample (0, aL);
-                    aR = airPhaseHpf.processSample (1, aR);
+                    fL = airPhaseHpf.processSample (0, fL);
+                    fR = airPhaseHpf.processSample (1, fR);
                 }
 
-                const float mid  = 0.5f * (aL + aR);
-                const float side = 0.5f * (aL - aR) * pairW;
-                ambL += (mid + side) * smPanL[2] * g;
-                ambR += (mid - side) * smPanR[2] * g;
+                const float mid  = 0.5f * (fL + fR);
+                const float side = 0.5f * (fL - fR) * farW;
+                const float panScaleL = juce::jmap (farW, 0.2f, 1.5f, 0.55f, 1.15f);
+                ambL += (mid + side) * smPanL[2] * panScaleL * g;
+                ambR += (mid - side) * smPanR[2] * 0.55f * g;
             }
 
-            // ATRIL 4: DECCA TREE
+            // ATRIL 4: FAR R (micrófono lejano derecho con apertura FAR WIDE)
             if (smGain[3] > 0.0005f)
             {
-                const float g = smGain[3] * 0.72f * smDirWeight[3];
+                const float g = smGain[3] * 0.76f * smDirWeight[3];
                 const float ambW = smAmbWeight[3];
-                const float dBase = smDelay[3];
-                const float capC = 0.5f * (readFrac (erBufL, dBase) + readFrac (erBufR, dBase));
-                const float capL = readFrac (erBufL, dBase + smDeccaOffset);
-                const float capR = readFrac (erBufR, dBase + smDeccaOffset);
-
-                float dL = (capL * 0.58f + capC * 0.34f) * 0.42f + (erL * 0.65f + fdnL * 0.85f) * ambW;
-                float dR = (capR * 0.58f + capC * 0.34f) * 0.42f + (erR * 0.65f + fdnR * 0.85f) * ambW;
+                const float dFarR = smDelay[3] + smDeccaOffset * 0.5f;
+                float rL = readFrac (erBufL, dFarR) * 0.22f + (erL * 0.42f + fdnL * 0.55f) * ambW;
+                float rR = readFrac (erBufR, dFarR) * 0.22f + (erR * 0.78f + fdnR * 0.95f) * ambW;
 
                 if (cfg.phaseSafe)
                 {
-                    dL = deccaPhaseHpf.processSample (0, dL);
-                    dR = deccaPhaseHpf.processSample (1, dR);
+                    rL = deccaPhaseHpf.processSample (0, rL);
+                    rR = deccaPhaseHpf.processSample (1, rR);
                 }
 
-                const float mid  = 0.5f * (dL + dR);
-                const float side = 0.5f * (dL - dR) * deccaW;
-                ambL += (mid + side) * smPanL[3] * g;
-                ambR += (mid - side) * smPanR[3] * g;
+                const float mid  = 0.5f * (rL + rR);
+                const float side = 0.5f * (rL - rR) * farW;
+                const float panScaleR = juce::jmap (farW, 0.2f, 1.5f, 0.55f, 1.15f);
+                ambL += (mid + side) * smPanL[3] * 0.55f * g;
+                ambR += (mid - side) * smPanR[3] * panScaleR * g;
             }
 
             // Modelado tonal por sala (bajos, medios y agudos) sobre el ambiente

@@ -1,18 +1,27 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(LosAndesCapital VERSION 2.5.0)
+project(BenBocazStudioPro VERSION 2.5.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Si usas JUCE via FetchContent o submodulo, ajusta esta ruta si corresponde
+include(FetchContent)
+
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/JUCE/CMakeLists.txt")
-    add_subdirectory(JUCE)
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/JUCE")
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/modules/JUCE/CMakeLists.txt")
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/modules/JUCE")
 else()
-    find_package(JUCE CONFIG REQUIRED)
+    FetchContent_Declare(
+        JUCE
+        GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+        GIT_TAG 8.0.6
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(JUCE)
 endif()
 
-juce_add_plugin(LosAndesCapital
+juce_add_plugin(BenBocazStudioPro
     COMPANY_NAME "BenBocaz"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
@@ -26,9 +35,9 @@ juce_add_plugin(LosAndesCapital
     PRODUCT_NAME "Los Andes Capital"
 )
 
-juce_generate_juce_header(LosAndesCapital)
+juce_generate_juce_header(BenBocazStudioPro)
 
-target_sources(LosAndesCapital
+target_sources(BenBocazStudioPro
     PRIVATE
         Source/PluginProcessor.h
         Source/PluginProcessor.cpp
@@ -39,7 +48,6 @@ target_sources(LosAndesCapital
         Source/DSP/VocalMicModeler.h
 )
 
-# Recolecta todos los recursos visuales (.jpg, .jpeg y .png) sin tener que renombrar nada
 file(GLOB_RECURSE CUSTOM_ASSETS_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/Assets/*.jpg"
     "${CMAKE_CURRENT_SOURCE_DIR}/Assets/*.jpeg"
@@ -47,12 +55,12 @@ file(GLOB_RECURSE CUSTOM_ASSETS_FILES CONFIGURE_DEPENDS
 )
 
 if(CUSTOM_ASSETS_FILES)
-    juce_add_binary_data(LosAndesCapitalAssets
+    juce_add_binary_data(BenBocazStudioProAssets
         NAMESPACE BinaryData
         SOURCES ${CUSTOM_ASSETS_FILES}
     )
 
-    target_compile_definitions(LosAndesCapital
+    target_compile_definitions(BenBocazStudioPro
         PRIVATE
             HAS_CUSTOM_ASSETS=1
             JUCE_WEB_BROWSER=0
@@ -60,9 +68,9 @@ if(CUSTOM_ASSETS_FILES)
             JUCE_VST3_CAN_REPLACE_VST2=0
     )
 
-    target_link_libraries(LosAndesCapital
+    target_link_libraries(BenBocazStudioPro
         PRIVATE
-            LosAndesCapitalAssets
+            BenBocazStudioProAssets
             juce::juce_audio_utils
             juce::juce_audio_processors
             juce::juce_dsp
@@ -74,7 +82,7 @@ if(CUSTOM_ASSETS_FILES)
             juce::juce_recommended_warning_flags
     )
 else()
-    target_compile_definitions(LosAndesCapital
+    target_compile_definitions(BenBocazStudioPro
         PRIVATE
             HAS_CUSTOM_ASSETS=0
             JUCE_WEB_BROWSER=0
@@ -82,7 +90,7 @@ else()
             JUCE_VST3_CAN_REPLACE_VST2=0
     )
 
-    target_link_libraries(LosAndesCapital
+    target_link_libraries(BenBocazStudioPro
         PRIVATE
             juce::juce_audio_utils
             juce::juce_audio_processors

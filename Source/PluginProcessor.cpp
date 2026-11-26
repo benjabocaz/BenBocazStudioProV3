@@ -94,14 +94,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProAudioProces
 
 void BenBocazStudioProAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
-    vocalModeler.prepare(sampleRate);
-    sourceModeler.prepare(sampleRate);
-    consoleChain.prepare(sampleRate, samplesPerBlock);
-    acousticEngine.prepare(sampleRate, samplesPerBlock);
-    parallelComp.prepare(sampleRate, samplesPerBlock);
+    const int safeBlockSize = std::max(samplesPerBlock, 4096);
 
-    roomOnlyBuffer.setSize(2, samplesPerBlock);
-    parCrushBuffer.setSize(2, samplesPerBlock);
+    vocalModeler.prepare(sampleRate, safeBlockSize);
+    sourceModeler.prepare(sampleRate);
+    consoleChain.prepare(sampleRate, safeBlockSize);
+    acousticEngine.prepare(sampleRate, safeBlockSize);
+    parallelComp.prepare(sampleRate, safeBlockSize);
+
+    roomOnlyBuffer.setSize(2, safeBlockSize, false, true, false);
+    parCrushBuffer.setSize(2, safeBlockSize, false, true, false);
 
     outGainSmooth.reset(sampleRate, 0.02);
     outGainSmooth.setCurrentAndTargetValue(1.0f);
@@ -172,14 +174,20 @@ void BenBocazStudioProAudioProcessor::processBlock(juce::AudioBuffer<float>& buf
                                getVal("farWide"),
                                mics);
 
-    if (getVal("parCrush") > 0.5f && getVal("parBlend") > 0.001f)
+    if (getVal("parCrush") > 0.5f && getVal("parBlend") > 0.001f && numSamples <= parCrushBuffer.getNumSamples())
     {
         const bool routeRoom = (static_cast<int>(getVal("parRoute")) == 0);
-        parCrushBuffer.setSize(2, numSamples, false, false, true);
-        parCrushBuffer.makeCopyOf(routeRoom ? roomOnlyBuffer : buffer, true);
+        auto& srcBuf = routeRoom ? roomOnlyBuffer : buffer;
 
+        parCrushBuffer.copyFrom(0, 0, srcBuf, 0, 0, numSamples);
+        if (srcBuf.getNumChannels() > 1)
+            parCrushBuffer.copyFrom(1, 0, srcBuf, 1, 0, numSamples);
+        else
+            parCrushBuffer.copyFrom(1, 0, srcBuf, 0, 0, numSamples);
+
+        juce::AudioBuffer<float> parView(parCrushBuffer.getArrayOfWritePointers(), 2, numSamples);
         parallelComp.setParameters(BenBocazDSP::VintageCompressor::FET_1176, -28.0f, 1.0f, true, true, true);
-        parallelComp.process(parCrushBuffer, true);
+        parallelComp.process(parView, true);
 
         const float blend = getVal("parBlend") * 0.55f;
         buffer.addFrom(0, 0, parCrushBuffer, 0, 0, numSamples, blend);

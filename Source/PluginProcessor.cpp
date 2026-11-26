@@ -1,933 +1,365 @@
+#include "PluginProcessor.h"
 #include "PluginEditor.h"
-#if HAS_CUSTOM_ASSETS
-    #include "BinaryData.h"
-#endif
 
-//==============================================================================
-// Look & Feel (Perillas estilo consola vintage: ticks finos, bisel oscuro, texto limpio)
-AndesLookAndFeel::AndesLookAndFeel()
+BenBocazStudioProAudioProcessor::BenBocazStudioProAudioProcessor()
+    : AudioProcessor(BusesProperties()
+                         .withInput("Input", juce::AudioChannelSet::stereo(), true)
+                         .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
+      apvts(*this, nullptr, "PARAMETERS", createParameterLayout())
 {
-    setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff1b1511));
-    setColour(juce::ComboBox::outlineColourId, juce::Colour(0xff6b5239));
-    setColour(juce::ComboBox::textColourId, juce::Colour(0xfff4e6cf));
-    setColour(juce::ComboBox::arrowColourId, juce::Colour(0xffe0a852));
-    setColour(juce::PopupMenu::backgroundColourId, juce::Colour(0xff19130f));
-    setColour(juce::PopupMenu::textColourId, juce::Colour(0xfff4e6cf));
-    setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(0xff996129));
-    setColour(juce::TextButton::buttonColourId, juce::Colour(0xff241c16));
-    setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffd99b43));
-    setColour(juce::TextButton::textColourOffId, juce::Colour(0xffeadbc2));
-    setColour(juce::TextButton::textColourOnId, juce::Colour(0xff140f0b));
-    setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xfff0dfc4));
-    setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
-    setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
 }
 
-void AndesLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
-                                        float sliderPos, const float rotaryStartAngle, const float rotaryEndAngle,
-                                        juce::Slider&)
+juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProAudioProcessor::createParameterLayout()
 {
-    const float size = static_cast<float>(juce::jmin(width, height));
-    const float radius = size * 0.34f;
-    const float cx = static_cast<float>(x) + static_cast<float>(width) * 0.5f;
-    const float cy = static_cast<float>(y) + static_cast<float>(height) * 0.5f;
-    const float angle = rotaryStartAngle + sliderPos * (rotaryEndAngle - rotaryStartAngle);
-
-    // 1. Ticks finos alrededor del recorrido
-    const int numTicks = 11;
-    for (int i = 0; i < numTicks; ++i)
-    {
-        const float frac = static_cast<float>(i) / static_cast<float>(numTicks - 1);
-        const float tickAngle = rotaryStartAngle + frac * (rotaryEndAngle - rotaryStartAngle);
-        const bool isActive = frac <= sliderPos + 0.001f;
-        const float r1 = radius + 4.0f;
-        const float r2 = radius + ((i == 0 || i == numTicks - 1 || i == numTicks / 2) ? 8.0f : 6.5f);
-
-        g.setColour(isActive ? juce::Colour(0xffe0b060) : juce::Colour(0xff594737));
-        g.drawLine(cx + std::sin(tickAngle) * r1, cy - std::cos(tickAngle) * r1,
-                   cx + std::sin(tickAngle) * r2, cy - std::cos(tickAngle) * r2, 1.3f);
-    }
-
-    // 2. Sombra proyectada
-    g.setColour(juce::Colour(0xa0050302));
-    g.fillEllipse(cx - radius - 1.0f, cy - radius + 3.0f, (radius + 1.0f) * 2.0f, (radius + 1.0f) * 2.0f);
-
-    // 3. Base metalica oscura con borde fino
-    juce::ColourGradient outerGrad(juce::Colour(0xff5e4d3e), cx - radius * 0.7f, cy - radius * 0.7f,
-                                   juce::Colour(0xff140f0c), cx + radius * 0.8f, cy + radius * 0.8f, false);
-    g.setGradientFill(outerGrad);
-    g.fillEllipse(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f);
-
-    // 4. Cuerpo interior con brillo sutil
-    const float innerR = radius * 0.86f;
-    juce::ColourGradient bodyGrad(juce::Colour(0xff3c3026), cx - innerR * 0.4f, cy - innerR * 0.5f,
-                                  juce::Colour(0xff120d0a), cx + innerR * 0.6f, cy + innerR * 0.6f, true);
-    g.setGradientFill(bodyGrad);
-    g.fillEllipse(cx - innerR, cy - innerR, innerR * 2.0f, innerR * 2.0f);
-
-    g.setColour(juce::Colour(0x55d4b287));
-    g.drawEllipse(cx - innerR, cy - innerR, innerR * 2.0f, innerR * 2.0f, 0.9f);
-
-    // 5. Linea indicadora crema limpia
-    juce::Path ptr;
-    ptr.addRoundedRectangle(-1.3f, -innerR + 2.0f, 2.6f, innerR * 0.55f, 1.1f);
-    ptr.applyTransform(juce::AffineTransform::rotation(angle).translated(cx, cy));
-    g.setColour(juce::Colour(0xfff7e8cc));
-    g.fillPath(ptr);
-}
-
-void AndesLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
-                                        bool isHover, bool)
-{
-    auto bounds = button.getLocalBounds().toFloat().reduced(1.0f);
-    const bool on = button.getToggleState();
-
-    // Botones compactos como "S" (Solo): texto centrado sin LED lateral
-    if (bounds.getWidth() <= 38.0f)
-    {
-        g.setColour(on ? juce::Colour(0xffd99b43) : juce::Colour(0xff211a14));
-        g.fillRoundedRectangle(bounds, 3.0f);
-        g.setColour(on ? juce::Colour(0xffffd485) : (isHover ? juce::Colour(0xff8c6d4e) : juce::Colour(0xff54402e)));
-        g.drawRoundedRectangle(bounds, 3.0f, 1.1f);
-
-        g.setColour(on ? juce::Colour(0xff140f0b) : juce::Colour(0xffd6c3a8));
-        g.setFont(juce::FontOptions(10.5f, juce::Font::bold));
-        g.drawFittedText(button.getButtonText(), bounds.toNearestInt(), juce::Justification::centred, 1);
-        return;
-    }
-
-    juce::ColourGradient bg(on ? juce::Colour(0xff47321d) : juce::Colour(0xff241c16),
-                            bounds.getX(), bounds.getY(),
-                            on ? juce::Colour(0xff291c10) : juce::Colour(0xff18120e),
-                            bounds.getX(), bounds.getBottom(), false);
-    g.setGradientFill(bg);
-    g.fillRoundedRectangle(bounds, 4.0f);
-
-    g.setColour(on ? juce::Colour(0xffe6a84c) : (isHover ? juce::Colour(0xff8c6d4e) : juce::Colour(0xff54402e)));
-    g.drawRoundedRectangle(bounds, 4.0f, 1.1f);
-
-    const float ledR = 3.8f;
-    const float ledX = bounds.getX() + 9.5f;
-    const float ledY = bounds.getCentreY();
-
-    if (on)
-    {
-        g.setColour(juce::Colour(0x55ffbe4d));
-        g.fillEllipse(ledX - ledR - 2.2f, ledY - ledR - 2.2f, (ledR + 2.2f) * 2.0f, (ledR + 2.2f) * 2.0f);
-    }
-
-    g.setColour(on ? juce::Colour(0xffffc45e) : juce::Colour(0xff4a3b2e));
-    g.fillEllipse(ledX - ledR, ledY - ledR, ledR * 2.0f, ledR * 2.0f);
-
-    g.setColour(on ? juce::Colour(0xfffff0d6) : juce::Colour(0xffc9b69c));
-    g.setFont(juce::FontOptions(10.5f, juce::Font::bold));
-    g.drawFittedText(button.getButtonText(),
-                     bounds.withTrimmedLeft(19.0f).withTrimmedRight(4.0f).toNearestInt(),
-                     juce::Justification::centredLeft, 1);
-}
-
-//==============================================================================
-// AnalogVUMeter
-void AnalogVUMeter::setLevelDb(float db, bool isGainReduction)
-{
-    grMode = isGainReduction;
-    float norm = 0.0f;
-    if (grMode)
-        norm = std::clamp(1.0f - (db / 18.0f), 0.0f, 1.0f);
-    else
-        norm = std::clamp((db + 36.0f) / 39.0f, 0.0f, 1.0f);
-
-    const float next = smoothedNeedle * 0.72f + norm * 0.28f;
-    if (std::abs(next - smoothedNeedle) > 0.0005f)
-    {
-        smoothedNeedle = next;
-        repaint();
-    }
-}
-
-void AnalogVUMeter::paint(juce::Graphics& g)
-{
-    auto b = getLocalBounds().toFloat().reduced(1.0f);
-    juce::ColourGradient bg(juce::Colour(0xffedd08c), b.getCentreX(), b.getY(),
-                            juce::Colour(0xffbd833a), b.getCentreX(), b.getBottom(), false);
-    g.setGradientFill(bg);
-    g.fillRoundedRectangle(b, 4.0f);
-
-    g.setColour(juce::Colour(0xff2b1e14));
-    g.drawRoundedRectangle(b, 4.0f, 1.5f);
-
-    g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
-    g.drawText("-20   -10   -5   0   +3", b.withTrimmedTop(3.0f).withHeight(14.0f), juce::Justification::centred);
-    g.drawText(grMode ? "VU GR" : "VU OUT", b.withTrimmedLeft(6.0f).withTrimmedBottom(2.0f), juce::Justification::bottomLeft);
-
-    const float angle = juce::jmap(smoothedNeedle, -0.68f, 0.68f);
-    const float px = b.getCentreX();
-    const float py = b.getBottom() + 10.0f;
-    const float len = b.getHeight() * 0.92f;
-
-    g.setColour(juce::Colour(0xff1a120c));
-    g.drawLine(px, py, px + std::sin(angle) * len, py - std::cos(angle) * len, 1.8f);
-}
-
-//==============================================================================
-// Studio4MicStagePad
-Studio4MicStagePad::Studio4MicStagePad(juce::AudioProcessorValueTreeState& state)
-    : apvts(state)
-{
-    setInterceptsMouseClicks(true, false);
-    loadEmbeddedImages();
-}
-
-juce::Image Studio4MicStagePad::removeGreenScreen(const juce::Image& src)
-{
-    if (!src.isValid()) return {};
-    juce::Image out = src.convertedToFormat(juce::Image::ARGB);
-    juce::Image::BitmapData bd(out, juce::Image::BitmapData::readWrite);
-
-    for (int y = 0; y < out.getHeight(); ++y)
-    {
-        for (int x = 0; x < out.getWidth(); ++x)
-        {
-            auto c = bd.getPixelColour(x, y);
-            const int r = c.getRed(), g = c.getGreen(), b = c.getBlue();
-            const int maxRB = std::max(r, b);
-            const int greenExcess = g - maxRB;
-
-            // Solo elimina verde chroma puro para no volver transparentes tonos calidos/madera
-            if (greenExcess > 55 && g > 110)
-            {
-                bd.setPixelColour(x, y, juce::Colours::transparentBlack);
-            }
-            else if (greenExcess > 32 && g > 95)
-            {
-                const float alpha = 1.0f - std::clamp(static_cast<float>(greenExcess - 32) / 23.0f, 0.0f, 1.0f);
-                const uint8_t cleanG = static_cast<uint8_t>(std::min(g, maxRB + 10));
-                bd.setPixelColour(x, y, juce::Colour::fromRGBA(static_cast<uint8_t>(r), cleanG, static_cast<uint8_t>(b),
-                                                               static_cast<uint8_t>(alpha * 255.0f)));
-            }
-        }
-    }
-    return out;
-}
-
-void Studio4MicStagePad::loadEmbeddedImages()
-{
-#if HAS_CUSTOM_ASSETS
-    for (int i = 0; i < BinaryData::namedResourceListSize; ++i)
-    {
-        const juce::String name(BinaryData::namedResourceList[i]);
-        int dataSize = 0;
-        const char* data = BinaryData::getNamedResource(BinaryData::namedResourceList[i], dataSize);
-        if (!data || dataSize <= 0) continue;
-
-        auto loadImg = [&]() { return juce::ImageFileFormat::loadFrom(data, static_cast<size_t>(dataSize)); };
-
-        if (name.containsIgnoreCase("room_volcano_open"))        imgVolcanoOpen     = loadImg();
-        else if (name.containsIgnoreCase("room_volcano_closed")) imgVolcanoClosed   = loadImg();
-        else if (name.containsIgnoreCase("room_shangrila"))      imgShangrila       = loadImg();
-        else if (name.containsIgnoreCase("room_canyon"))         imgCanyon          = loadImg();
-        else if (name.containsIgnoreCase("mic_main_mono"))       imgMicMono         = removeGreenScreen(loadImg());
-        else if (name.containsIgnoreCase("mic_main_xy"))         imgMicXY           = removeGreenScreen(loadImg());
-        else if (name.containsIgnoreCase("mic_stereo_pair"))     imgMicPair         = removeGreenScreen(loadImg());
-        else if (name.containsIgnoreCase("mic_far_l"))           imgMicFarL         = removeGreenScreen(loadImg());
-        else if (name.containsIgnoreCase("mic_far_r"))           imgMicFarR         = removeGreenScreen(loadImg());
-        else if (name.containsIgnoreCase("src_vocals"))          imgSrcVocals       = removeGreenScreen(loadImg());
-        else if (name.containsIgnoreCase("src_drums"))           imgSrcDrums        = removeGreenScreen(loadImg());
-        else if (name.containsIgnoreCase("src_bass"))            imgSrcBass         = removeGreenScreen(loadImg());
-        else if (name.containsIgnoreCase("src_guitar_stereo"))   imgSrcGuitarStereo = removeGreenScreen(loadImg());
-        else if (name.containsIgnoreCase("src_guitar_mono"))     imgSrcGuitarMono   = removeGreenScreen(loadImg());
-        else if (name.containsIgnoreCase("src_ensemble"))        imgSrcEnsemble     = removeGreenScreen(loadImg());
-        else if (name.containsIgnoreCase("src_monitors"))        imgSrcMonitors     = removeGreenScreen(loadImg());
-    }
-#endif
-}
-
-void Studio4MicStagePad::setSelectedMic(int idx)
-{
-    selectedMic = std::clamp(idx, 0, 3);
-    repaint();
-}
-
-void Studio4MicStagePad::centerSelectedMic()
-{
-    if (selectedMic == 2 || selectedMic == 3)
-    {
-        beginMicGesture(2); beginMicGesture(3);
-        setMicPos(2, 0.14f, 0.86f);
-        setMicPos(3, 0.86f, 0.86f);
-        endMicGesture(2); endMicGesture(3);
-    }
-    else
-    {
-        const char* yId = (selectedMic == 0) ? "mic1Y" : "mic2Y";
-        beginMicGesture(selectedMic);
-        setMicPos(selectedMic, 0.50f, apvts.getRawParameterValue(yId)->load());
-        endMicGesture(selectedMic);
-    }
-    repaint();
-}
-
-juce::Point<float> Studio4MicStagePad::normToScreen(float nx, float ny, juce::Rectangle<float> area) const
-{
-    const float yTop = area.getY() + area.getHeight() * 0.56f;
-    const float yBot = area.getBottom() - area.getHeight() * 0.04f;
-    const float sy = yTop + ny * (yBot - yTop);
-
-    const float spread = 0.52f + 0.44f * ny;
-    const float sx = area.getCentreX() + (nx - 0.5f) * area.getWidth() * spread;
-    return { sx, sy };
-}
-
-juce::Point<float> Studio4MicStagePad::screenToNorm(juce::Point<float> pt, juce::Rectangle<float> area) const
-{
-    const float yTop = area.getY() + area.getHeight() * 0.56f;
-    const float yBot = area.getBottom() - area.getHeight() * 0.04f;
-    const float ny = std::clamp((pt.y - yTop) / std::max(1.0f, yBot - yTop), 0.05f, 0.95f);
-
-    const float spread = 0.52f + 0.44f * ny;
-    const float nx = std::clamp(0.5f + (pt.x - area.getCentreX()) / std::max(1.0f, area.getWidth() * spread), 0.05f, 0.95f);
-    return { nx, ny };
-}
-
-void Studio4MicStagePad::beginMicGesture(int idx)
-{
-    static constexpr const char* xIds[4] = { "mic1X", "mic2X", "mic3X", "mic4X" };
-    static constexpr const char* yIds[4] = { "mic1Y", "mic2Y", "mic3Y", "mic4Y" };
-    if (auto* px = apvts.getParameter(xIds[idx])) px->beginChangeGesture();
-    if (auto* py = apvts.getParameter(yIds[idx])) py->beginChangeGesture();
-}
-
-void Studio4MicStagePad::endMicGesture(int idx)
-{
-    static constexpr const char* xIds[4] = { "mic1X", "mic2X", "mic3X", "mic4X" };
-    static constexpr const char* yIds[4] = { "mic1Y", "mic2Y", "mic3Y", "mic4Y" };
-    if (auto* px = apvts.getParameter(xIds[idx])) px->endChangeGesture();
-    if (auto* py = apvts.getParameter(yIds[idx])) py->endChangeGesture();
-}
-
-void Studio4MicStagePad::setMicPos(int idx, float nx, float ny)
-{
-    static constexpr const char* xIds[4] = { "mic1X", "mic2X", "mic3X", "mic4X" };
-    static constexpr const char* yIds[4] = { "mic1Y", "mic2Y", "mic3Y", "mic4Y" };
-
-    if (auto* px = apvts.getParameter(xIds[idx])) px->setValueNotifyingHost(px->convertTo0to1(nx));
-    if (auto* py = apvts.getParameter(yIds[idx])) py->setValueNotifyingHost(py->convertTo0to1(ny));
-}
-
-void Studio4MicStagePad::paint(juce::Graphics& g)
-{
-    auto area = getLocalBounds().toFloat().reduced(2.0f);
-    const int roomIdx   = static_cast<int>(apvts.getRawParameterValue("room")->load());
-    const int wallsIdx  = static_cast<int>(apvts.getRawParameterValue("walls")->load());
-    const int srcIdx    = static_cast<int>(apvts.getRawParameterValue("source")->load());
-    const bool mainSt   = apvts.getRawParameterValue("mainStereo")->load() > 0.5f;
-    const bool phaseOk  = apvts.getRawParameterValue("phaseSafe")->load() > 0.5f;
-
-    // 1. Fondo de sala
-    const juce::Image* roomImg = nullptr;
-    if (roomIdx == 0)      roomImg = (wallsIdx == 0) ? &imgVolcanoOpen : &imgVolcanoClosed;
-    else if (roomIdx == 1) roomImg = &imgShangrila;
-    else                   roomImg = &imgCanyon;
-
-    if (roomImg && roomImg->isValid())
-        g.drawImageWithin(*roomImg, area.toNearestInt().getX(), area.toNearestInt().getY(),
-                          area.toNearestInt().getWidth(), area.toNearestInt().getHeight(),
-                          juce::RectanglePlacement::fillDestination);
-    else
-    {
-        g.setColour(juce::Colour(0xff231913));
-        g.fillRoundedRectangle(area, 4.0f);
-    }
-
-    // 2. Fuente asentada en el piso de la sala con escala de perspectiva
-    const juce::Image* srcImg = nullptr;
-    if (srcIdx == 0)      srcImg = &imgSrcVocals;
-    else if (srcIdx == 1) srcImg = &imgSrcDrums;
-    else if (srcIdx == 2) srcImg = &imgSrcBass;
-    else if (srcIdx == 3) srcImg = (mainSt && imgSrcGuitarStereo.isValid()) ? &imgSrcGuitarStereo : &imgSrcGuitarMono;
-    else if (srcIdx == 4) srcImg = &imgSrcEnsemble;
-    else if (srcIdx == 5) srcImg = &imgSrcMonitors;
-
-    const float floorLineY = area.getY() + area.getHeight() * 0.64f;
-
-    if (srcImg && srcImg->isValid())
-    {
-        const float heightRatio = (srcIdx == 1) ? 0.35f : (srcIdx == 4 ? 0.34f : 0.30f);
-        const float sh = area.getHeight() * heightRatio;
-        const float sw = sh * (static_cast<float>(srcImg->getWidth()) / std::max(1, srcImg->getHeight()));
-        const float sx = area.getCentreX() - sw * 0.5f;
-        const float sy = floorLineY - sh;
-
-        g.setOpacity(1.0f);
-        g.setColour(juce::Colour(0x660b0705));
-        g.fillEllipse(area.getCentreX() - sw * 0.45f, floorLineY - 5.0f, sw * 0.90f, 11.0f);
-        g.drawImage(*srcImg, juce::Rectangle<float>(sx, sy, sw, sh));
-    }
-
-    // 3. Dibujar 4 atriles ordenados por profundidad (Y) y apoyados sobre el piso
-    static constexpr const char* xIds[4] = { "mic1X", "mic2X", "mic3X", "mic4X" };
-    static constexpr const char* yIds[4] = { "mic1Y", "mic2Y", "mic3Y", "mic4Y" };
-    static constexpr const char* gIds[4] = { "mic1Gain", "mic2Gain", "mic3Gain", "mic4Gain" };
-    static constexpr const char* labels[4] = { "1:MAIN", "2:ROOM/AIR", "3:FAR L", "4:FAR R" };
-
-    std::array<int, 4> order { 0, 1, 2, 3 };
-    std::sort(order.begin(), order.end(), [&](int a, int b)
-    {
-        return apvts.getRawParameterValue(yIds[a])->load() < apvts.getRawParameterValue(yIds[b])->load();
-    });
-
-    for (int idx : order)
-    {
-        const float nx = apvts.getRawParameterValue(xIds[idx])->load();
-        const float ny = apvts.getRawParameterValue(yIds[idx])->load();
-        const float gain = apvts.getRawParameterValue(gIds[idx])->load();
-        const auto pos = normToScreen(nx, ny, area);
-
-        const float scale = 0.22f + 0.25f * ny;
-        const float micH = area.getHeight() * scale;
-
-        const juce::Image* micImg = nullptr;
-        if (idx == 0)      micImg = mainSt ? &imgMicXY : &imgMicMono;
-        else if (idx == 1) micImg = &imgMicPair;
-        else if (idx == 2) micImg = imgMicFarL.isValid() ? &imgMicFarL : &imgMicMono;
-        else               micImg = imgMicFarR.isValid() ? &imgMicFarR : &imgMicMono;
-
-        const float alpha = (gain > 0.01f) ? 1.0f : 0.45f;
-        g.setOpacity(alpha);
-
-        if (micImg && micImg->isValid())
-        {
-            const float micW = micH * (static_cast<float>(micImg->getWidth()) / std::max(1, micImg->getHeight()));
-            g.drawImage(*micImg, juce::Rectangle<float>(pos.x - micW * 0.5f, pos.y - micH, micW, micH));
-        }
-        else
-        {
-            g.setColour(juce::Colour(0xffd99b43));
-            g.fillEllipse(pos.x - 8.0f, pos.y - 8.0f, 16.0f, 16.0f);
-        }
-
-        g.setOpacity(1.0f);
-
-        if (idx == selectedMic)
-        {
-            const float ringW = 24.0f + 16.0f * ny;
-            const float ringH = 8.0f + 5.0f * ny;
-            g.setColour(juce::Colour(0xffffb84d));
-            g.drawEllipse(pos.x - ringW * 0.5f, pos.y - ringH * 0.5f, ringW, ringH, 2.0f);
-        }
-
-        const float distM = BenBocazDSP::AcousticEngine::computeDistanceMeters(roomIdx, nx, ny);
-        const juce::String tag = juce::String(labels[idx]) + " " + juce::String(distM, 1) + "m";
-        const juce::Rectangle<float> tagRect(pos.x - 48.0f, pos.y - micH - 18.0f, 96.0f, 16.0f);
-
-        g.setColour(idx == selectedMic ? juce::Colour(0xd9261b12) : juce::Colour(0xb0140e0a));
-        g.fillRoundedRectangle(tagRect, 3.0f);
-        g.setColour(idx == selectedMic ? juce::Colour(0xffffb84d) : juce::Colour(0xff8c7258));
-        g.drawRoundedRectangle(tagRect, 3.0f, 1.0f);
-        g.setColour(juce::Colour(0xfff5e6d0));
-        g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
-        g.drawFittedText(tag, tagRect.toNearestInt(), juce::Justification::centred, 1);
-    }
-
-    // 4. Barra superior de estado dentro del escenario
-    const juce::String roomTitle = (roomIdx == 0) ? (wallsIdx == 0 ? "VOLCANO HALL | GATES OPEN" : "VOLCANO HALL | GATES CLOSED")
-                                 : (roomIdx == 1 ? "SHANGRI-LA | LIVE WOOD" : "CANYON ROOM | STUDIO WOOD");
-    g.setColour(juce::Colour(0xb8120c08));
-    g.fillRect(area.withHeight(20.0f));
-    g.setColour(juce::Colour(0xffe6d2b5));
-    g.setFont(juce::FontOptions(10.5f, juce::Font::bold));
-    g.drawText(roomTitle, area.withHeight(20.0f).reduced(8.0f, 0.0f), juce::Justification::centredLeft);
-
-    g.setColour(phaseOk ? juce::Colour(0xff9be08a) : juce::Colour(0xffe0a85c));
-    g.drawText(phaseOk ? "[OK] PHASE LOCKED" : "NATURAL TIME-OF-FLIGHT",
-               area.withHeight(20.0f).reduced(8.0f, 0.0f), juce::Justification::centredRight);
-
-    // 5. Tarjeta inferior de microfono seleccionado y distancia
-    const float selX = apvts.getRawParameterValue(xIds[selectedMic])->load();
-    const float selY = apvts.getRawParameterValue(yIds[selectedMic])->load();
-    const float selDist = BenBocazDSP::AcousticEngine::computeDistanceMeters(roomIdx, selX, selY);
-    const int panPct = static_cast<int>(std::round((selX - 0.5f) * 200.0f));
-    const juce::String panStr = (panPct == 0) ? "CENTER" : (panPct < 0 ? juce::String(std::abs(panPct)) + "% L" : juce::String(panPct) + "% R");
-
-    const juce::Rectangle<float> infoCard(area.getRight() - 188.0f, area.getBottom() - 40.0f, 180.0f, 32.0f);
-    g.setColour(juce::Colour(0xd917110d));
-    g.fillRoundedRectangle(infoCard, 4.0f);
-    g.setColour(juce::Colour(0xff7d6245));
-    g.drawRoundedRectangle(infoCard, 4.0f, 1.0f);
-
-    g.setColour(juce::Colour(0xffffc45e));
-    g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
-    g.drawText("SELECTED: " + juce::String(labels[selectedMic]), infoCard.getX() + 7.0f, infoCard.getY() + 3.0f, 166.0f, 12.0f, juce::Justification::centredLeft);
-
-    g.setColour(juce::Colour(0xffe8d7be));
-    g.setFont(juce::FontOptions(9.0f, juce::Font::bold));
-    g.drawText("DIST: " + juce::String(selDist, 1) + "m  |  PAN: " + panStr, infoCard.getX() + 7.0f, infoCard.getY() + 16.0f, 166.0f, 12.0f, juce::Justification::centredLeft);
-
-    g.setColour(juce::Colour(0xff6b5239));
-    g.drawRoundedRectangle(area, 4.0f, 1.5f);
-}
-
-void Studio4MicStagePad::mouseDown(const juce::MouseEvent& e)
-{
-    auto area = getLocalBounds().toFloat().reduced(2.0f);
-    static constexpr const char* xIds[4] = { "mic1X", "mic2X", "mic3X", "mic4X" };
-    static constexpr const char* yIds[4] = { "mic1Y", "mic2Y", "mic3Y", "mic4Y" };
-
-    float bestDist = std::max(78.0f, area.getHeight() * 0.26f);
-    int bestIdx = -1;
-    for (int i = 0; i < 4; ++i)
-    {
-        const float nx = apvts.getRawParameterValue(xIds[i])->load();
-        const float ny = apvts.getRawParameterValue(yIds[i])->load();
-        const auto p = normToScreen(nx, ny, area);
-        const float micH = area.getHeight() * (0.22f + 0.25f * ny);
-
-        const float dBase = e.position.getDistanceFrom(p);
-        const float dBody = e.position.getDistanceFrom(p.translated(0.0f, -micH * 0.45f));
-        const float d = std::min(dBase, dBody);
-
-        if (d < bestDist)
-        {
-            bestDist = d;
-            bestIdx = i;
-        }
-    }
-
-    if (bestIdx >= 0)
-    {
-        selectedMic = bestIdx;
-        draggingMic = bestIdx;
-        beginMicGesture(draggingMic);
-
-        const bool linkFarLR = apvts.getRawParameterValue("link34")->load() > 0.5f;
-        if (linkFarLR && (draggingMic == 2 || draggingMic == 3))
-            beginMicGesture((draggingMic == 2) ? 3 : 2);
-
-        repaint();
-    }
-}
-
-void Studio4MicStagePad::mouseDrag(const juce::MouseEvent& e)
-{
-    if (draggingMic < 0) return;
-
-    auto area = getLocalBounds().toFloat().reduced(2.0f);
-    auto norm = screenToNorm(e.position, area);
-
-    const bool snap = apvts.getRawParameterValue("snapCenter")->load() > 0.5f;
-    const bool linkFarLR = apvts.getRawParameterValue("link34")->load() > 0.5f;
-
-    if (snap && draggingMic < 2 && std::abs(norm.x - 0.5f) < 0.045f)
-        norm.x = 0.5f;
-
-    setMicPos(draggingMic, norm.x, norm.y);
-
-    if (linkFarLR && (draggingMic == 2 || draggingMic == 3))
-    {
-        const int other = (draggingMic == 2) ? 3 : 2;
-        setMicPos(other, std::clamp(1.0f - norm.x, 0.05f, 0.95f), norm.y);
-    }
-
-    repaint();
-}
-
-void Studio4MicStagePad::mouseUp(const juce::MouseEvent&)
-{
-    if (draggingMic >= 0)
-    {
-        endMicGesture(draggingMic);
-        const bool linkFarLR = apvts.getRawParameterValue("link34")->load() > 0.5f;
-        if (linkFarLR && (draggingMic == 2 || draggingMic == 3))
-            endMicGesture((draggingMic == 2) ? 3 : 2);
-    }
-    draggingMic = -1;
-}
-
-//==============================================================================
-// Editor Principal
-BenBocazStudioProAudioProcessorEditor::BenBocazStudioProAudioProcessorEditor(BenBocazStudioProAudioProcessor& p)
-    : AudioProcessorEditor(&p), processor(p), stagePad(p.apvts)
-{
-    setLookAndFeel(&lnf);
-    setSize(1260, 790);
-
-#if HAS_CUSTOM_ASSETS
-    for (int i = 0; i < BinaryData::namedResourceListSize; ++i)
-    {
-        if (juce::String(BinaryData::namedResourceList[i]).containsIgnoreCase("chassis_wood"))
-        {
-            int sz = 0;
-            if (const char* d = BinaryData::getNamedResource(BinaryData::namedResourceList[i], sz))
-                imgChassisWood = juce::ImageFileFormat::loadFrom(d, static_cast<size_t>(sz));
-            break;
-        }
-    }
-#endif
-
-    auto addCombo = [this](juce::ComboBox& cb, const char* paramId)
-    {
-        if (auto* choice = dynamic_cast<juce::AudioParameterChoice*>(processor.apvts.getParameter(paramId)))
-            cb.addItemList(choice->choices, 1);
-        addAndMakeVisible(cb);
-        comboAtts.push_back(std::make_unique<ComboAtt>(processor.apvts, paramId, cb));
-    };
-
-    auto addToggle = [this](juce::ToggleButton& bt, const char* paramId)
-    {
-        addAndMakeVisible(bt);
-        buttonAtts.push_back(std::make_unique<ButtonAtt>(processor.apvts, paramId, bt));
-    };
-
-    auto addKnob = [this](juce::Slider& s, const char* paramId, const juce::String& suffix = {})
-    {
-        setupKnob(s, suffix);
-        addAndMakeVisible(s);
-        sliderAtts.push_back(std::make_unique<SliderAtt>(processor.apvts, paramId, s));
-    };
+    std::vector<std::unique_ptr<juce::RangedAudioParameter>> p;
 
     // Top bar
-    addCombo(cbMode, "mode");
-    addCombo(cbRouting, "routing");
-    addToggle(btHqMode, "hqMode");
-    btHqMode.onClick = [this]() { updateHqButtonText(); };
-    updateHqButtonText();
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("mode", "Mode", juce::StringArray{ "Re-Mic", "Insert" }, 0));
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("routing", "Routing", juce::StringArray{ "EQ -> Comp -> Chamber", "Chamber -> EQ -> Comp" }, 0));
+    p.push_back(std::make_unique<juce::AudioParameterBool>("hqMode", "HQ 4x Mode", true));
+    p.push_back(std::make_unique<juce::AudioParameterBool>("phaseSafe", "Phase Safe", true));
+    p.push_back(std::make_unique<juce::AudioParameterBool>("polarityInv", "Polarity Inv", false));
+    p.push_back(std::make_unique<juce::AudioParameterBool>("snapCenter", "Snap Center", true));
+    p.push_back(std::make_unique<juce::AudioParameterBool>("link34", "Link 3+4", true));
+    p.push_back(std::make_unique<juce::AudioParameterBool>("mainStereo", "Main Stereo", false));
+    p.push_back(std::make_unique<juce::AudioParameterBool>("roomOn", "Room On", true));
 
-    addToggle(btPhaseSafe, "phaseSafe");
-    addToggle(btPolarity, "polarityInv");
-    addToggle(btSnapCenter, "snapCenter");
-    addToggle(btLink34, "link34");
-    btLink34.setButtonText("LINK FAR L/R");
+    // Vocal Mic Mod & Room Setup (Volcano = 0 principal)
+    p.push_back(std::make_unique<juce::AudioParameterBool>("vocalModOn", "Vocal Mic Mod", false));
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("vocalInMic", "Input Mic", juce::StringArray{ "Shure SM7B", "Neumann U87", "Condenser", "Shure SM58" }, 0));
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("vocalTargetMic", "Target Mic", juce::StringArray{ "Sony C-800G", "Neumann U47", "Telefunken 251", "U87 Vintage" }, 0));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("vocalInGain", "Mic In", juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("vocalOutGain", "Mic Out", juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
 
-    for (int i = 0; i < processor.getNumPrograms(); ++i)
-        cbPresets.addItem(processor.getProgramName(i), i + 1);
-    cbPresets.setSelectedId(processor.getCurrentProgram() + 1, juce::dontSendNotification);
-    cbPresets.onChange = [this]()
-    {
-        const int idx = cbPresets.getSelectedId() - 1;
-        if (idx >= 0)
-        {
-            processor.applyFactoryPreset(idx);
-            stagePad.repaint();
-        }
-    };
-    addAndMakeVisible(cbPresets);
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("source", "Room Source", juce::StringArray{ "Vocals", "Drums", "Bass Amp", "Guitar Cab", "Ensemble", "Monitors" }, 0));
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("monitorSpeaker", "Monitor Speaker", juce::StringArray{ "Altec Main", "NS-10M", "Auratone" }, 0));
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("room", "Studio Room", juce::StringArray{ "Volcano Hall", "Shangri-La", "Canyon Room" }, 0));
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("walls", "Room Walls", juce::StringArray{ "Gates Open", "Gates Closed" }, 1));
 
-    addAndMakeVisible(btCenterMic);
-    btCenterMic.onClick = [this]() { stagePad.centerSelectedMic(); };
+    // Tube / Tape Drive
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("circuit", "Tube Circuit", juce::StringArray{ "Neve Class-A", "API Discrete", "Ampex Tape" }, 0));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("drive", "Tube Drive", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.20f));
 
-    addAndMakeVisible(vuMeter);
-    addAndMakeVisible(btVuMode);
-    btVuMode.onClick = [this]()
-    {
-        vuGrMode = !vuGrMode;
-        btVuMode.setButtonText(vuGrMode ? "VU: GR" : "VU: OUT");
-    };
+    // 4 Mics: 1:MAIN, 2:ROOM/AIR, 3:FAR L, 4:FAR R
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("mic1Gain", "1: Main", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 1.00f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("mic2Gain", "2: Room/Air", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.25f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("mic3Gain", "3: Far L", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.00f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("mic4Gain", "4: Far R", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.00f));
 
-    addAndMakeVisible(btExpandStage);
-    btExpandStage.onClick = [this]()
-    {
-        expandedStage = !expandedStage;
-        btExpandStage.setButtonText(expandedStage ? "SHOW RACKS" : "EXPAND STAGE");
-        resized();
-    };
+    p.push_back(std::make_unique<juce::AudioParameterBool>("mic1Solo", "Mic 1 Solo", false));
+    p.push_back(std::make_unique<juce::AudioParameterBool>("mic2Solo", "Mic 2 Solo", false));
+    p.push_back(std::make_unique<juce::AudioParameterBool>("mic3Solo", "Mic 3 Solo", false));
+    p.push_back(std::make_unique<juce::AudioParameterBool>("mic4Solo", "Mic 4 Solo", false));
 
-    // Stage
-    addToggle(btMainStereo, "mainStereo");
-    btMainStereo.onClick = [this]() { stagePad.repaint(); };
-    addToggle(btRoomOn, "roomOn");
-    addAndMakeVisible(stagePad);
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("mic1X", "Mic 1 X", 0.05f, 0.95f, 0.50f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("mic1Y", "Mic 1 Y", 0.05f, 0.95f, 0.14f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("mic2X", "Mic 2 X", 0.05f, 0.95f, 0.50f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("mic2Y", "Mic 2 Y", 0.05f, 0.95f, 0.42f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("mic3X", "Mic 3 X", 0.05f, 0.95f, 0.14f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("mic3Y", "Mic 3 Y", 0.05f, 0.95f, 0.86f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("mic4X", "Mic 4 X", 0.05f, 0.95f, 0.86f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("mic4Y", "Mic 4 Y", 0.05f, 0.95f, 0.86f));
 
-    // Left Panel
-    addToggle(btVocalMod, "vocalModOn");
-    addCombo(cbVocalIn, "vocalInMic");
-    addCombo(cbVocalTarget, "vocalTargetMic");
-    addKnob(slVocalIn, "vocalInGain");   setupLabel(lbVocalIn, "MIC IN");
-    addKnob(slVocalOut, "vocalOutGain"); setupLabel(lbVocalOut, "MIC OUT");
-    addCombo(cbSource, "source");
-    cbSource.onChange = [this]() { stagePad.repaint(); };
-    addCombo(cbMonitor, "monitorSpeaker");
-    addCombo(cbRoom, "room");
-    cbRoom.onChange = [this]() { stagePad.repaint(); };
-    addCombo(cbWalls, "walls");
-    cbWalls.onChange = [this]() { stagePad.repaint(); };
-    addCombo(cbCircuit, "circuit");
-    addKnob(slDrive, "drive");           setupLabel(lbDrive, "TUBE / TAPE DRIVE");
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("pairWide", "Pair Wide", 0.0f, 1.0f, 1.0f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("farWide", "Far Wide", 0.0f, 1.0f, 1.0f));
 
-    // 4 Mics strip + seleccion automatica + linkeo al unisono de perillas Far L / Far R
-    static constexpr const char* micBtnNames[4] = { "1: MAIN", "2: ROOM/AIR", "3: FAR L", "4: FAR R" };
-    static constexpr const char* micGainIds[4]  = { "mic1Gain", "mic2Gain", "mic3Gain", "mic4Gain" };
-    static constexpr const char* micSoloIds[4]  = { "mic1Solo", "mic2Solo", "mic3Solo", "mic4Solo" };
+    // Analog Console EQ
+    p.push_back(std::make_unique<juce::AudioParameterBool>("eqOn", "EQ On", true));
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("eqModel", "EQ Model", juce::StringArray{ "Neve 1073 (British)", "API 550 (American)", "Pultec (Tube)" }, 0));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("hpf", "HPF", juce::NormalisableRange<float>(20.0f, 300.0f, 1.0f, 0.45f), 20.0f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("lowGain", "Low Gain", juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("lowFreq", "Low Freq", juce::StringArray{ "60 Hz", "110 Hz", "220 Hz" }, 1));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("midGain", "Mid Gain", juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("midFreq", "Mid Freq", juce::StringArray{ "700 Hz", "1.6 kHz", "3.2 kHz", "4.8 kHz" }, 1));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("highGain", "High Gain", juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("highFreq", "High Freq", juce::StringArray{ "8 kHz", "12 kHz", "16 kHz" }, 1));
 
-    for (int i = 0; i < 4; ++i)
-    {
-        btMicSelect[i].setButtonText(micBtnNames[i]);
-        btMicSelect[i].onClick = [this, i]() { stagePad.setSelectedMic(i); };
-        addAndMakeVisible(btMicSelect[i]);
-        addKnob(slMicGain[i], micGainIds[i]);
-        slMicGain[i].onValueChange = [this, i]()
-        {
-            stagePad.setSelectedMic(i);
-            if (!syncingFarGains && (i == 2 || i == 3) && btLink34.getToggleState())
-            {
-                syncingFarGains = true;
-                const int other = (i == 2) ? 3 : 2;
-                slMicGain[other].setValue(slMicGain[i].getValue(), juce::sendNotificationSync);
-                syncingFarGains = false;
-            }
-        };
-        btMicSolo[i].setButtonText("S");
-        addToggle(btMicSolo[i], micSoloIds[i]);
-    }
-    addKnob(slPairWide, "pairWide"); setupLabel(lbPairWide, "ROOM WIDE");
-    addKnob(slFarWide, "farWide");   setupLabel(lbFarWide, "FAR WIDE");
+    // Outboard & Parallel Comp
+    p.push_back(std::make_unique<juce::AudioParameterBool>("compOn", "Comp On", true));
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("compModel", "Comp Model", juce::StringArray{ "1176LN (FET)", "LA-2A (Opto)", "SSL (VCA)", "Fairchild (Tube)" }, 0));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("compThresh", "Threshold", juce::NormalisableRange<float>(-40.0f, 0.0f, 0.1f), -16.0f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("compMix", "Comp Mix", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 1.0f));
+    p.push_back(std::make_unique<juce::AudioParameterBool>("scLink", "SC Link", true));
+    p.push_back(std::make_unique<juce::AudioParameterBool>("scFilter", "SC Filter", false));
+    p.push_back(std::make_unique<juce::AudioParameterBool>("parCrush", "Par Crush", false));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("parBlend", "Par Blend", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.35f));
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("parRoute", "Par Route", juce::StringArray{ "Room Mics", "Full Mix" }, 0));
 
-    // Right Panel: Echo Chambers
-    addToggle(btChamberOn, "chamberOn");
-    addCombo(cbChamberModel, "chamberModel");
-    addKnob(slChamberSend, "chamberSend");       setupLabel(lbChSend, "SEND");
-    addKnob(slChamberDecay, "chamberDecay");     setupLabel(lbChDecay, "DECAY");
-    addKnob(slChamberPre, "chamberPreDelay");    setupLabel(lbChPre, "PRE-DELAY");
-    addKnob(slChamberWidth, "chamberWidth");     setupLabel(lbChWidth, "WIDTH");
+    // Echo Chambers
+    p.push_back(std::make_unique<juce::AudioParameterBool>("chamberOn", "Chamber On", true));
+    p.push_back(std::make_unique<juce::AudioParameterChoice>("chamberModel", "Echo Chamber", juce::StringArray{ "Chamber 1 (Tight)", "Chamber 2 (Warm)", "Chamber 3 (Classic)" }, 2));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("chamberSend", "Send", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.18f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("chamberDecay", "Decay", juce::NormalisableRange<float>(0.10f, 1.0f, 0.01f), 0.72f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("chamberPreDelay", "Pre-Delay", juce::NormalisableRange<float>(0.0f, 100.0f, 0.5f), 22.0f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("chamberWidth", "Width", juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 1.0f));
 
-    // Bottom Left: Console EQ
-    addToggle(btEqOn, "eqOn");
-    addCombo(cbEqModel, "eqModel");
-    addKnob(slHpf, "hpf");           setupLabel(lbHpf, "HPF");
-    addKnob(slLowGain, "lowGain");   setupLabel(lbLow, "LOW");
-    addKnob(slMidGain, "midGain");   setupLabel(lbMid, "MID");
-    addKnob(slHighGain, "highGain"); setupLabel(lbHigh, "HIGH");
-    addCombo(cbLowFreq, "lowFreq");
-    addCombo(cbMidFreq, "midFreq");
-    addCombo(cbHighFreq, "highFreq");
+    // Master
+    p.push_back(std::make_unique<juce::AudioParameterFloat>("outputGain", "Output", juce::NormalisableRange<float>(-24.0f, 12.0f, 0.1f), 0.0f));
 
-    // Bottom Mid: Outboard & Parallel Comp
-    addToggle(btCompOn, "compOn");
-    addCombo(cbCompModel, "compModel");
-    addKnob(slCompThresh, "compThresh"); setupLabel(lbCompThresh, "THRESHOLD");
-    addKnob(slCompMix, "compMix");       setupLabel(lbCompMix, "MIX");
-    addToggle(btScLink, "scLink");
-    addToggle(btScFilter, "scFilter");
-    addToggle(btParCrush, "parCrush");
-    addKnob(slParBlend, "parBlend");     setupLabel(lbParBlend, "PAR BLEND");
-    addCombo(cbParRoute, "parRoute");
-
-    // Bottom Right: Master
-    addKnob(slOutput, "outputGain"); setupLabel(lbOutput, "OUTPUT");
-
-    startTimerHz(20);
+    return { p.begin(), p.end() };
 }
 
-BenBocazStudioProAudioProcessorEditor::~BenBocazStudioProAudioProcessorEditor()
+void BenBocazStudioProAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
-    stopTimer();
-    setLookAndFeel(nullptr);
+    vocalModeler.prepare(sampleRate);
+    consoleChain.prepare(sampleRate, samplesPerBlock);
+    acousticEngine.prepare(sampleRate, samplesPerBlock);
+    parallelComp.prepare(sampleRate, samplesPerBlock);
+
+    roomOnlyBuffer.setSize(2, samplesPerBlock);
+    parCrushBuffer.setSize(2, samplesPerBlock);
+
+    outGainSmooth.reset(sampleRate, 0.02);
+    outGainSmooth.setCurrentAndTargetValue(1.0f);
+
+    const bool hqOn = apvts.getRawParameterValue("hqMode")->load() > 0.5f;
+    lastReportedLatency = consoleChain.getLatencySamples(hqOn);
+    setLatencySamples(lastReportedLatency);
 }
 
-void BenBocazStudioProAudioProcessorEditor::setupKnob(juce::Slider& s, const juce::String& suffix)
+void BenBocazStudioProAudioProcessor::releaseResources()
 {
-    s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 64, 18);
-    s.textFromValueFunction = [suffix](double v)
-    {
-        if (std::abs(v) < 0.005) v = 0.0;
-        return juce::String(v, 2) + suffix;
-    };
+    vocalModeler.reset();
+    consoleChain.reset();
+    acousticEngine.reset();
+    parallelComp.reset();
 }
 
-void BenBocazStudioProAudioProcessorEditor::setupLabel(juce::Label& l, const juce::String& text,
-                                                       float fontSize, juce::Justification just)
+bool BenBocazStudioProAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 {
-    l.setText(text, juce::dontSendNotification);
-    l.setFont(juce::FontOptions(fontSize, juce::Font::bold));
-    l.setColour(juce::Label::textColourId, juce::Colour(0xffd4bc9c));
-    l.setJustificationType(just);
-    addAndMakeVisible(l);
+    return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
 }
 
-void BenBocazStudioProAudioProcessorEditor::updateHqButtonText()
+void BenBocazStudioProAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
-    btHqMode.setButtonText(btHqMode.getToggleState() ? "HQ 4x" : "TRACK 0ms");
-}
-
-void BenBocazStudioProAudioProcessorEditor::timerCallback()
-{
-    vuMeter.setLevelDb(vuGrMode ? processor.vuGrDb.load(std::memory_order_relaxed)
-                                : processor.vuOutDb.load(std::memory_order_relaxed),
-                       vuGrMode);
-
-    stagePad.repaint();
-}
-
-void BenBocazStudioProAudioProcessorEditor::paint(juce::Graphics& g)
-{
-    if (imgChassisWood.isValid())
-        g.drawImageWithin(imgChassisWood, 0, 0, getWidth(), getHeight(), juce::RectanglePlacement::fillDestination);
-    else
-        g.fillAll(juce::Colour(0xff1a1410));
-
-    g.setColour(juce::Colour(0x88120c08));
-    g.fillRect(getLocalBounds());
-
-    g.setColour(juce::Colour(0xe017110d));
-    g.fillRect(0, 0, getWidth(), 102);
-    g.setColour(juce::Colour(0xff6b5239));
-    g.drawHorizontalLine(102, 0.0f, static_cast<float>(getWidth()));
-
-    g.setColour(juce::Colour(0xfff5e6d0));
-    g.setFont(juce::FontOptions(24.0f, juce::Font::bold));
-    g.drawText("LOS ANDES CAPITAL", 24, 10, 320, 30, juce::Justification::centredLeft);
-
-    g.setColour(juce::Colour(0xffd9a457));
-    g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
-    g.drawText("VOLCANO HALL  |  3D 4-STAND RE-MIC  |  ANALOG CONSOLE", 24, 40, 360, 16, juce::Justification::centredLeft);
-
-    if (!expandedStage)
-    {
-        auto drawRackPanel = [&](int rx, int ry, int rw, int rh, const juce::String& title)
-        {
-            juce::Rectangle<float> panel(static_cast<float>(rx), static_cast<float>(ry),
-                                         static_cast<float>(rw), static_cast<float>(rh));
-            g.setColour(juce::Colour(0xb816100c));
-            g.fillRoundedRectangle(panel, 6.0f);
-            g.setColour(juce::Colour(0xff634b34));
-            g.drawRoundedRectangle(panel, 6.0f, 1.2f);
-
-            g.setColour(juce::Colour(0xd0211812));
-            g.fillRoundedRectangle(panel.withHeight(22.0f), 6.0f);
-            g.setColour(juce::Colour(0xffe6c795));
-            g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
-            g.drawText(title, rx + 10, ry + 3, rw - 20, 16, juce::Justification::centredLeft);
-        };
-
-        drawRackPanel(24, 110, 264, 434, "VOCAL MIC MOD & ROOM SETUP");
-        drawRackPanel(300, 110, 660, 434, "LIVE ROOM 3D STAGE");
-        drawRackPanel(972, 110, 264, 434, "ECHO CHAMBERS");
-        drawRackPanel(24, 556, 572, 214, "ANALOG CONSOLE EQ");
-        drawRackPanel(608, 556, 488, 214, "OUTBOARD & PARALLEL COMP");
-        drawRackPanel(1108, 556, 128, 214, "MASTER");
-    }
-}
-
-void BenBocazStudioProAudioProcessorEditor::resized()
-{
-    cbMode.setBounds(370, 22, 105, 26);
-    cbRouting.setBounds(485, 22, 185, 26);
-    btHqMode.setBounds(680, 10, 115, 22);
-    btPhaseSafe.setBounds(680, 36, 115, 22);
-    btPolarity.setBounds(805, 36, 115, 22);
-    vuMeter.setBounds(930, 8, 210, 48);
-    btVuMode.setBounds(1150, 14, 92, 34);
-
-    cbPresets.setBounds(24, 68, 285, 24);
-    btSnapCenter.setBounds(322, 68, 115, 24);
-    btLink34.setBounds(446, 68, 112, 24);
-    btCenterMic.setBounds(566, 68, 105, 24);
-    btExpandStage.setBounds(1110, 68, 132, 24);
-
-    const bool showRacks = !expandedStage;
-    auto setRacksVisible = [&](bool v)
-    {
-        btVocalMod.setVisible(v); cbVocalIn.setVisible(v); cbVocalTarget.setVisible(v);
-        slVocalIn.setVisible(v); slVocalOut.setVisible(v); lbVocalIn.setVisible(v); lbVocalOut.setVisible(v);
-        cbSource.setVisible(v); cbMonitor.setVisible(v); cbRoom.setVisible(v); cbWalls.setVisible(v);
-        cbCircuit.setVisible(v); slDrive.setVisible(v); lbDrive.setVisible(v);
-
-        btChamberOn.setVisible(v); cbChamberModel.setVisible(v);
-        slChamberSend.setVisible(v); slChamberDecay.setVisible(v); slChamberPre.setVisible(v); slChamberWidth.setVisible(v);
-        lbChSend.setVisible(v); lbChDecay.setVisible(v); lbChPre.setVisible(v); lbChWidth.setVisible(v);
-
-        btEqOn.setVisible(v); cbEqModel.setVisible(v);
-        slHpf.setVisible(v); slLowGain.setVisible(v); slMidGain.setVisible(v); slHighGain.setVisible(v);
-        lbHpf.setVisible(v); lbLow.setVisible(v); lbMid.setVisible(v); lbHigh.setVisible(v);
-        cbLowFreq.setVisible(v); cbMidFreq.setVisible(v); cbHighFreq.setVisible(v);
-
-        btCompOn.setVisible(v); cbCompModel.setVisible(v);
-        slCompThresh.setVisible(v); slCompMix.setVisible(v); lbCompThresh.setVisible(v); lbCompMix.setVisible(v);
-        btScLink.setVisible(v); btScFilter.setVisible(v); btParCrush.setVisible(v);
-        slParBlend.setVisible(v); lbParBlend.setVisible(v); cbParRoute.setVisible(v);
-
-        slOutput.setVisible(v); lbOutput.setVisible(v);
-    };
-    setRacksVisible(showRacks);
-
-    if (expandedStage)
-    {
-        btMainStereo.setBounds(990, 114, 120, 22);
-        btRoomOn.setBounds(1120, 114, 110, 22);
-        stagePad.setBounds(30, 144, 1200, 520);
-
-        const int stripY = 678;
-        for (int i = 0; i < 4; ++i)
-        {
-            const int x = 60 + i * 195;
-            btMicSelect[i].setBounds(x, stripY, 105, 20);
-            slMicGain[i].setBounds(x + 12, stripY + 22, 82, 78);
-            btMicSolo[i].setBounds(x + 100, stripY + 42, 26, 24);
-        }
-        lbPairWide.setBounds(865, stripY, 100, 18);
-        slPairWide.setBounds(875, stripY + 20, 82, 78);
-        lbFarWide.setBounds(1015, stripY, 100, 18);
-        slFarWide.setBounds(1025, stripY + 20, 82, 78);
+    juce::ScopedNoDenormals noDenormals;
+    const int numSamples = buffer.getNumSamples();
+    if (numSamples == 0)
         return;
-    }
 
-    btVocalMod.setBounds(32, 138, 248, 22);
-    cbVocalIn.setBounds(32, 166, 118, 24);
-    cbVocalTarget.setBounds(160, 166, 120, 24);
-    lbVocalIn.setBounds(36, 196, 100, 16);   slVocalIn.setBounds(44, 212, 82, 76);
-    lbVocalOut.setBounds(166, 196, 100, 16); slVocalOut.setBounds(174, 212, 82, 76);
+    auto getVal = [this](const char* id) { return apvts.getRawParameterValue(id)->load(); };
 
-    cbSource.setBounds(32, 298, 118, 24);
-    cbMonitor.setBounds(160, 298, 120, 24);
-    cbRoom.setBounds(32, 330, 118, 24);
-    cbWalls.setBounds(160, 330, 120, 24);
-
-    cbCircuit.setBounds(32, 376, 248, 24);
-    lbDrive.setBounds(32, 408, 248, 16);
-    slDrive.setBounds(115, 426, 82, 80);
-
-    btMainStereo.setBounds(732, 114, 112, 22);
-    btRoomOn.setBounds(848, 114, 104, 22);
-    stagePad.setBounds(306, 140, 648, 298);
-
-    const int micY = 446;
-    for (int i = 0; i < 4; ++i)
+    const bool hq4x = getVal("hqMode") > 0.5f;
+    const int targetLatency = consoleChain.getLatencySamples(hq4x);
+    if (targetLatency != lastReportedLatency)
     {
-        const int x = 310 + i * 111;
-        btMicSelect[i].setBounds(x, micY, 86, 20);
-        slMicGain[i].setBounds(x + 4, micY + 22, 74, 72);
-        btMicSolo[i].setBounds(x + 80, micY + 42, 24, 22);
+        lastReportedLatency = targetLatency;
+        setLatencySamples(targetLatency);
     }
-    lbPairWide.setBounds(762, micY, 84, 18); slPairWide.setBounds(768, micY + 20, 74, 72);
-    lbFarWide.setBounds(860, micY, 84, 18);  slFarWide.setBounds(866, micY + 20, 74, 72);
 
-    btChamberOn.setBounds(1158, 114, 72, 22);
-    cbChamberModel.setBounds(980, 142, 248, 26);
-    lbChSend.setBounds(988, 196, 100, 16);  slChamberSend.setBounds(996, 214, 84, 80);
-    lbChDecay.setBounds(1126, 196, 100, 16); slChamberDecay.setBounds(1134, 214, 84, 80);
-    lbChPre.setBounds(988, 336, 100, 16);   slChamberPre.setBounds(996, 354, 84, 80);
-    lbChWidth.setBounds(1126, 336, 100, 16); slChamberWidth.setBounds(1134, 354, 84, 80);
+    // 1. Vocal Mic Modeler (EQ y saturacion suave propia de la etapa vocal)
+    const bool vocalOn = getVal("vocalModOn") > 0.5f;
+    vocalModeler.setParameters(vocalOn,
+                               static_cast<int>(getVal("vocalInMic")),
+                               static_cast<int>(getVal("vocalTargetMic")),
+                               getVal("vocalInGain"),
+                               getVal("vocalOutGain"));
+    vocalModeler.processEQ(buffer);
 
-    btEqOn.setBounds(504, 562, 82, 22);
-    cbEqModel.setBounds(32, 562, 216, 24);
-    lbHpf.setBounds(42, 598, 86, 16);  slHpf.setBounds(42, 616, 84, 78);
-    lbLow.setBounds(176, 598, 86, 16); slLowGain.setBounds(176, 616, 84, 78); cbLowFreq.setBounds(174, 706, 88, 24);
-    lbMid.setBounds(316, 598, 86, 16); slMidGain.setBounds(316, 616, 84, 78); cbMidFreq.setBounds(314, 706, 88, 24);
-    lbHigh.setBounds(456, 598, 86, 16); slHighGain.setBounds(456, 616, 84, 78); cbHighFreq.setBounds(454, 706, 88, 24);
+    // 2. Live Room 3D Stage (Volcano / Shangri-La / Canyon)
+    std::array<BenBocazDSP::MicState, 4> mics;
+    mics[0] = { getVal("mic1X"), getVal("mic1Y"), getVal("mic1Gain"), getVal("mic1Solo") > 0.5f };
+    mics[1] = { getVal("mic2X"), getVal("mic2Y"), getVal("mic2Gain"), getVal("mic2Solo") > 0.5f };
+    mics[2] = { getVal("mic3X"), getVal("mic3Y"), getVal("mic3Gain"), getVal("mic3Solo") > 0.5f };
+    mics[3] = { getVal("mic4X"), getVal("mic4Y"), getVal("mic4Gain"), getVal("mic4Solo") > 0.5f };
 
-    btCompOn.setBounds(998, 562, 88, 22);
-    cbCompModel.setBounds(618, 562, 164, 24);
-    btScLink.setBounds(792, 562, 92, 22);
-    btScFilter.setBounds(792, 590, 92, 22);
+    const bool isReMic = (static_cast<int>(getVal("mode")) == 0);
+    acousticEngine.processRoom(buffer, roomOnlyBuffer,
+                               isReMic && (getVal("roomOn") > 0.5f),
+                               static_cast<int>(getVal("room")),
+                               static_cast<int>(getVal("walls")),
+                               getVal("mainStereo") > 0.5f,
+                               getVal("phaseSafe") > 0.5f,
+                               getVal("pairWide"),
+                               getVal("farWide"),
+                               mics);
 
-    lbCompThresh.setBounds(622, 610, 90, 16); slCompThresh.setBounds(624, 628, 84, 78);
-    lbCompMix.setBounds(744, 610, 90, 16);    slCompMix.setBounds(746, 628, 84, 78);
+    // 3. Parallel Crush opcional (sobre Room Mics o Full Mix)
+    if (getVal("parCrush") > 0.5f && getVal("parBlend") > 0.001f)
+    {
+        const bool routeRoom = (static_cast<int>(getVal("parRoute")) == 0);
+        parCrushBuffer.setSize(2, numSamples, false, false, true);
+        if (routeRoom)
+            parCrushBuffer.makeCopyOf(roomOnlyBuffer, true);
+        else
+            parCrushBuffer.makeCopyOf(buffer, true);
 
-    btParCrush.setBounds(914, 590, 110, 22);
-    lbParBlend.setBounds(920, 618, 96, 16);
-    slParBlend.setBounds(926, 634, 80, 72);
-    cbParRoute.setBounds(910, 712, 126, 24);
+        parallelComp.setParameters(BenBocazDSP::VintageCompressor::FET_1176, -28.0f, 1.0f, true, true, true);
+        parallelComp.process(parCrushBuffer, true);
 
-    lbOutput.setBounds(1128, 604, 90, 16);
-    slOutput.setBounds(1130, 624, 86, 82);
+        const float blend = getVal("parBlend") * 0.55f;
+        buffer.addFrom(0, 0, parCrushBuffer, 0, 0, numSamples, blend);
+        if (buffer.getNumChannels() > 1)
+            buffer.addFrom(1, 0, parCrushBuffer, 1, 0, numSamples, blend);
+    }
+
+    // 4. Console Chain (Drive + EQ + Comp con Auto-Gain) & Echo Chamber
+    static constexpr float loHzTbl[3]  = { 60.0f, 110.0f, 220.0f };
+    static constexpr float midHzTbl[4] = { 700.0f, 1600.0f, 3200.0f, 4800.0f };
+    static constexpr float hiHzTbl[3]  = { 8000.0f, 12000.0f, 16000.0f };
+
+    const int routing = static_cast<int>(getVal("routing"));
+    auto runChamber = [&]()
+    {
+        acousticEngine.processChamber(buffer,
+                                      getVal("chamberOn") > 0.5f,
+                                      static_cast<int>(getVal("chamberModel")),
+                                      getVal("chamberSend"),
+                                      getVal("chamberDecay"),
+                                      getVal("chamberPreDelay"),
+                                      getVal("chamberWidth"));
+    };
+
+    if (routing == 1)
+        runChamber();
+
+    consoleChain.process(buffer, hq4x,
+                         getVal("eqOn") > 0.5f,
+                         static_cast<int>(getVal("eqModel")),
+                         getVal("hpf"),
+                         getVal("lowGain"),  loHzTbl[std::clamp(static_cast<int>(getVal("lowFreq")), 0, 2)],
+                         getVal("midGain"),  midHzTbl[std::clamp(static_cast<int>(getVal("midFreq")), 0, 3)],
+                         getVal("highGain"), hiHzTbl[std::clamp(static_cast<int>(getVal("highFreq")), 0, 2)],
+                         getVal("compOn") > 0.5f,
+                         static_cast<int>(getVal("compModel")),
+                         getVal("compThresh"),
+                         getVal("compMix"),
+                         getVal("scLink") > 0.5f,
+                         getVal("scFilter") > 0.5f,
+                         static_cast<int>(getVal("circuit")),
+                         getVal("drive"),
+                         false,
+                         0.0f);
+
+    if (routing == 0)
+        runChamber();
+
+    // 5. Master Output (suavizado) + Polarity + VU Metering
+    const float pol = (getVal("polarityInv") > 0.5f) ? -1.0f : 1.0f;
+    outGainSmooth.setTargetValue(juce::Decibels::decibelsToGain(getVal("outputGain")));
+
+    float peak = 0.0f;
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const float g = outGainSmooth.getNextValue() * pol;
+        for (int c = 0; c < buffer.getNumChannels(); ++c)
+        {
+            const float s = buffer.getSample(c, i) * g;
+            buffer.setSample(c, i, s);
+            peak = std::max(peak, std::abs(s));
+        }
+    }
+
+    vuOutDb.store(juce::Decibels::gainToDecibels(peak + 1e-6f, -60.0f), std::memory_order_relaxed);
+    vuGrDb.store(consoleChain.getGainReductionDb(), std::memory_order_relaxed);
+}
+
+const juce::String BenBocazStudioProAudioProcessor::getProgramName(int index)
+{
+    static const juce::StringArray names {
+        "01. Volcano Clean Default",
+        "02. Volcano Epic Drums & Gates Open",
+        "03. Volcano Ensemble Wide",
+        "04. Shangri-La Vocal Warm & Air",
+        "05. Canyon Stereo Guitar Cab",
+        "06. Canyon Tight Bass / Monitors"
+    };
+    return names[std::clamp(index, 0, names.size() - 1)];
+}
+
+void BenBocazStudioProAudioProcessor::setCurrentProgram(int index)
+{
+    applyFactoryPreset(index);
+}
+
+void BenBocazStudioProAudioProcessor::applyFactoryPreset(int presetIndex)
+{
+    currentPresetIndex = std::clamp(presetIndex, 0, 5);
+    auto setP = [this](const char* id, float val)
+    {
+        if (auto* param = apvts.getParameter(id))
+            param->setValue(param->convertTo0to1(val));
+    };
+
+    // Base limpia compartida
+    setP("mode", 0.0f); setP("roomOn", 1.0f); setP("phaseSafe", 1.0f); setP("link34", 1.0f);
+    setP("vocalModOn", 0.0f); setP("parCrush", 0.0f); setP("lowGain", 0.0f); setP("midGain", 0.0f); setP("highGain", 0.0f);
+    setP("mic1Solo", 0.0f); setP("mic2Solo", 0.0f); setP("mic3Solo", 0.0f); setP("mic4Solo", 0.0f);
+    setP("outputGain", 0.0f);
+
+    switch (currentPresetIndex)
+    {
+        case 0: // 01. Volcano Clean Default
+            setP("room", 0.0f); setP("walls", 1.0f); setP("source", 0.0f); setP("mainStereo", 0.0f);
+            setP("mic1Gain", 1.00f); setP("mic2Gain", 0.25f); setP("mic3Gain", 0.00f); setP("mic4Gain", 0.00f);
+            setP("mic1X", 0.50f); setP("mic1Y", 0.14f); setP("mic2X", 0.50f); setP("mic2Y", 0.42f);
+            setP("mic3X", 0.14f); setP("mic3Y", 0.86f); setP("mic4X", 0.86f); setP("mic4Y", 0.86f);
+            setP("chamberSend", 0.18f); setP("compThresh", -16.0f);
+            break;
+
+        case 1: // 02. Volcano Epic Drums & Gates Open
+            setP("room", 0.0f); setP("walls", 0.0f); setP("source", 1.0f); setP("mainStereo", 1.0f);
+            setP("mic1Gain", 1.00f); setP("mic2Gain", 0.42f); setP("mic3Gain", 0.55f); setP("mic4Gain", 0.55f);
+            setP("mic1X", 0.50f); setP("mic1Y", 0.18f); setP("mic2X", 0.50f); setP("mic2Y", 0.48f);
+            setP("mic3X", 0.10f); setP("mic3Y", 0.90f); setP("mic4X", 0.90f); setP("mic4Y", 0.90f);
+            setP("parCrush", 1.0f); setP("parBlend", 0.40f); setP("parRoute", 0.0f);
+            setP("chamberSend", 0.12f); setP("compThresh", -18.0f);
+            break;
+
+        case 2: // 03. Volcano Ensemble Wide
+            setP("room", 0.0f); setP("walls", 0.0f); setP("source", 4.0f); setP("mainStereo", 1.0f);
+            setP("mic1Gain", 0.90f); setP("mic2Gain", 0.48f); setP("mic3Gain", 0.68f); setP("mic4Gain", 0.68f);
+            setP("mic1X", 0.50f); setP("mic1Y", 0.24f); setP("mic2X", 0.50f); setP("mic2Y", 0.55f);
+            setP("mic3X", 0.08f); setP("mic3Y", 0.92f); setP("mic4X", 0.92f); setP("mic4Y", 0.92f);
+            setP("chamberSend", 0.28f); setP("chamberDecay", 0.82f); setP("compThresh", -14.0f);
+            break;
+
+        case 3: // 04. Shangri-La Vocal Warm & Air
+            setP("room", 1.0f); setP("walls", 0.0f); setP("source", 0.0f); setP("mainStereo", 0.0f);
+            setP("vocalModOn", 1.0f); setP("vocalInMic", 0.0f); setP("vocalTargetMic", 0.0f);
+            setP("mic1Gain", 1.00f); setP("mic2Gain", 0.30f); setP("mic3Gain", 0.18f); setP("mic4Gain", 0.18f);
+            setP("mic1X", 0.50f); setP("mic1Y", 0.12f); setP("mic2X", 0.50f); setP("mic2Y", 0.40f);
+            setP("mic3X", 0.18f); setP("mic3Y", 0.78f); setP("mic4X", 0.82f); setP("mic4Y", 0.78f);
+            setP("compModel", 1.0f); setP("compThresh", -18.0f); setP("chamberSend", 0.24f);
+            break;
+
+        case 4: // 05. Canyon Stereo Guitar Cab
+            setP("room", 2.0f); setP("walls", 0.0f); setP("source", 3.0f); setP("mainStereo", 1.0f);
+            setP("mic1Gain", 1.00f); setP("mic2Gain", 0.22f); setP("mic3Gain", 0.38f); setP("mic4Gain", 0.38f);
+            setP("mic1X", 0.50f); setP("mic1Y", 0.14f); setP("mic2X", 0.50f); setP("mic2Y", 0.36f);
+            setP("mic3X", 0.16f); setP("mic3Y", 0.72f); setP("mic4X", 0.84f); setP("mic4Y", 0.72f);
+            setP("drive", 0.35f); setP("chamberSend", 0.15f);
+            break;
+
+        case 5: // 06. Canyon Tight Bass / Monitors
+        default:
+            setP("room", 2.0f); setP("walls", 1.0f); setP("source", 2.0f); setP("mainStereo", 0.0f);
+            setP("mic1Gain", 1.00f); setP("mic2Gain", 0.12f); setP("mic3Gain", 0.00f); setP("mic4Gain", 0.00f);
+            setP("mic1X", 0.50f); setP("mic1Y", 0.10f); setP("mic2X", 0.50f); setP("mic2Y", 0.32f);
+            setP("compModel", 0.0f); setP("compThresh", -20.0f); setP("chamberSend", 0.05f);
+            break;
+    }
+}
+
+void BenBocazStudioProAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
+{
+    if (auto xml = apvts.copyState().createXml())
+        copyXmlToBinary(*xml, destData);
+}
+
+void BenBocazStudioProAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
+{
+    if (auto xml = getXmlFromBinary(data, sizeInBytes))
+        if (xml->hasTagName(apvts.state.getType()))
+            apvts.replaceState(juce::ValueTree::fromXml(*xml));
+}
+
+juce::AudioProcessorEditor* BenBocazStudioProAudioProcessor::createEditor()
+{
+    return new BenBocazStudioProAudioProcessorEditor(*this);
+}
+
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
+{
+    return new BenBocazStudioProAudioProcessor();
 }

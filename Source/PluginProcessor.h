@@ -70,6 +70,7 @@ private:
     int lastVSrc = -1, lastVTgt = -1;
     int lastSrcIdx = -1, lastMonIdx = -1;
     float lastDrvAmt = -1.0f;
+    float lastOffAxis = -1.0f;
     int lastEqType = -1, lastTubeModel = -1, lastLowF = -1, lastMidF = -1, lastHighF = -1;
     float lastHpf = -1.0f, lastLow = -99.0f, lastMid = -99.0f, lastHigh = -99.0f;
     int lastCompType = -1;

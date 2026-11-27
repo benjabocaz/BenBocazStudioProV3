@@ -404,7 +404,6 @@ public:
         }
     }
 
-    // offAxisNorm: 0.0 = justo frente al centro del cono (máximo filo), 1.0 = fuera de eje (cálido/redondo)
     void configure (int sourceIdx, float driveAmount, float offAxisNorm = 0.0f)
     {
         active = false;
@@ -420,7 +419,7 @@ public:
             coneNotch1[ch].setBypass(); coneNotch2[ch].setBypass(); coneEdge[ch].setBypass();
         }
 
-        if (sourceIdx == 4) // GUITAR CAB (MONO — 4x12 / 1x12 Celestion style)
+        if (sourceIdx == 4) // GUITAR CAB (MONO)
         {
             active = true;
             const float beamCut = juce::jmap (offAx, 0.0f, 1.0f, 5600.0f, 3450.0f);
@@ -429,23 +428,22 @@ public:
             for (int ch = 0; ch < 2; ++ch)
             {
                 hpf[ch].setHighPass (86.0f, 0.85f);
-                boxRes[ch].setPeak (118.0f, 3.4f, 2.2f);             // Resonancia física de caja cerrada
+                boxRes[ch].setPeak (118.0f, 3.4f, 2.2f);
                 cabBody[ch].setPeak (480.0f, 2.0f + cabDrive * 1.0f, 1.15f);
-                coneNotch1[ch].setPeak (1150.0f, -4.2f, 3.6f);       // Imperfección de cono de papel
-                coneNotch2[ch].setPeak (3150.0f, -3.5f, 4.2f);       // Cancelación de dust-cap
-                coneEdge[ch].setPeak (2250.0f, edgeDb, 1.75f);       // Mordida sensible al eje
-                lpf1[ch].setLowPass (beamCut, 0.82f);                // Corte abrupto 24 dB/oct
+                coneNotch1[ch].setPeak (1150.0f, -4.2f, 3.6f);
+                coneNotch2[ch].setPeak (3150.0f, -3.5f, 4.2f);
+                coneEdge[ch].setPeak (2250.0f, edgeDb, 1.75f);
+                lpf1[ch].setLowPass (beamCut, 0.82f);
                 lpf2[ch].setLowPass (beamCut * 1.08f, 0.72f);
             }
         }
-        else if (sourceIdx == 5) // GUITAR CAB (STEREO — L: British V30 / R: American Tweed)
+        else if (sourceIdx == 5) // GUITAR CAB (STEREO)
         {
             active = true;
             stereoSpreadAmount = 0.36f;
             const float beamCutL = juce::jmap (offAx, 0.0f, 1.0f, 6100.0f, 3750.0f);
             const float beamCutR = juce::jmap (offAx, 0.0f, 1.0f, 5200.0f, 3300.0f);
 
-            // Izquierdo: British mordedor
             hpf[0].setHighPass (82.0f, 0.84f);
             boxRes[0].setPeak (124.0f, 3.2f, 2.1f);
             cabBody[0].setPeak (540.0f, 1.8f + cabDrive * 1.0f, 1.1f);
@@ -455,7 +453,6 @@ public:
             lpf1[0].setLowPass (beamCutL, 0.80f);
             lpf2[0].setLowPass (beamCutL * 1.08f, 0.72f);
 
-            // Derecho: American cálido y abierto
             hpf[1].setHighPass (92.0f, 0.80f);
             boxRes[1].setPeak (108.0f, 3.6f, 1.9f);
             cabBody[1].setPeak (410.0f, 2.6f + cabDrive * 1.2f, 1.2f);
@@ -465,7 +462,7 @@ public:
             lpf1[1].setLowPass (beamCutR, 0.85f);
             lpf2[1].setLowPass (beamCutR * 1.10f, 0.74f);
         }
-        else if (sourceIdx == 6) // BASS AMP (LOW END — Ampeg 8x10 / 4x10 style)
+        else if (sourceIdx == 6) // BASS AMP (LOW END)
         {
             active = true;
             isBassCab = true;
@@ -474,11 +471,11 @@ public:
             for (int ch = 0; ch < 2; ++ch)
             {
                 hpf[ch].setHighPass (34.0f, 0.85f);
-                boxRes[ch].setPeak (68.0f, 3.8f + cabDrive * 1.2f, 1.35f);   // Thump de gabinete grande
-                cabBody[ch].setPeak (760.0f, 2.8f + cabDrive * 1.6f, 1.35f); // Gruñido clásico de bajo
-                coneNotch1[ch].setPeak (360.0f, -2.6f, 2.1f);                // Limpieza de caja hueca
+                boxRes[ch].setPeak (68.0f, 3.8f + cabDrive * 1.2f, 1.35f);
+                cabBody[ch].setPeak (760.0f, 2.8f + cabDrive * 1.6f, 1.35f);
+                coneNotch1[ch].setPeak (360.0f, -2.6f, 2.1f);
                 coneNotch2[ch].setPeak (1850.0f, -2.4f, 2.8f);
-                coneEdge[ch].setPeak (2450.0f, juce::jmap (offAx, 0.0f, 1.0f, 1.8f, -0.5f), 1.6f); // Tweeter sutil
+                coneEdge[ch].setPeak (2450.0f, juce::jmap (offAx, 0.0f, 1.0f, 1.8f, -0.5f), 1.6f);
                 lpf1[ch].setLowPass (tweeterCut, 0.82f);
                 lpf2[ch].setLowPass (tweeterCut * 1.12f, 0.72f);
             }
@@ -497,20 +494,17 @@ public:
         {
             const auto c = static_cast<size_t> (ch & 1);
 
-            // Excursión mecánica del cono (compresión suave ligada a la energía en graves)
             exLowState[c] += exLowCoeff * (x - exLowState[c]);
             const float absLow = std::abs (exLowState[c]);
             const float coeff = (absLow > exEnv[c]) ? exAtkCoeff : exRelCoeff;
             exEnv[c] += coeff * (absLow - exEnv[c]);
             const float excursionComp = 1.0f / (1.0f + exEnv[c] * (isBassCab ? 0.85f : 0.60f));
 
-            // Saturación de bobina/cono PRE-SALA (antes de que el sonido viaje por el aire)
             const float satDrive = 1.08f + cabDrive * (isBassCab ? 0.95f : 1.35f);
             const float bias = (isBassCab ? 0.035f : 0.055f) * cabDrive;
             float y = (std::tanh (x * satDrive + bias) - std::tanh (bias)) / (1.0f + cabDrive * 0.52f);
             y *= excursionComp;
 
-            // Respuesta física del gabinete y cono de papel
             y = hpf[c].processSample (ch, y);
             y = boxRes[c].processSample (ch, y);
             y = cabBody[c].processSample (ch, y);
@@ -556,7 +550,8 @@ private:
 };
 
 //==============================================================================
-// EQ de Consola Analógica TPT-SVF con Inductor Saturation
+// EQ de Consola Analógica TPT-SVF con Carácter Distintivo Real
+// (Huella de circuito en 0 dB + Topologías propias + Saturación por Boost)
 //==============================================================================
 class ConsoleEqWithTubeStage
 {
@@ -565,16 +560,28 @@ public:
     {
         sr = sampleRate > 0.0 ? sampleRate : 176400.0;
         hpf.prepare (sr);
+        charLow.prepare (sr);
+        charHigh.prepare (sr);
         low.prepare (sr);
         pultecDip.prepare (sr);
         mid.prepare (sr);
         high.prepare (sr);
+        highSoften.prepare (sr);
         reset();
     }
 
     void reset()
     {
-        hpf.reset(); low.reset(); pultecDip.reset(); mid.reset(); high.reset();
+        hpf.reset();
+        charLow.reset();
+        charHigh.reset();
+        low.reset();
+        pultecDip.reset();
+        mid.reset();
+        high.reset();
+        highSoften.reset();
+        dcIn.fill (0.0f);
+        dcOut.fill (0.0f);
     }
 
     void updateParameters (int eqModel, float hpfHz,
@@ -591,59 +598,125 @@ public:
         const float fMid  = midFreqs[static_cast<size_t> (std::clamp (midFreqIdx, 0, 3))];
         const float fHigh = highFreqs[static_cast<size_t> (std::clamp (highFreqIdx, 0, 2))];
 
-        currentModel = eqModel;
-        midInductorDrive = (eqModel == 0 && std::abs (midDb) > 1.0f) ? std::clamp (std::abs (midDb) * 0.025f, 0.0f, 0.28f) : 0.0f;
+        currentModel = std::clamp (eqModel, 0, 3);
+
+        // Energía de empuje positivo (solo los boosts saturan el circuito analógico)
+        const float lowBoost  = std::max (0.0f, lowDb);
+        const float midBoost  = std::max (0.0f, midDb);
+        const float highBoost = std::max (0.0f, highDb);
+
+        lowInductorDrive = 0.0f;
+        midInductorDrive = 0.0f;
+        stageDrive = 0.0f;
 
         if (hpfHz > 22.0f)
-            hpf.setHighPass (hpfHz, (eqModel == 0 || eqModel == 3) ? 0.78f : 0.7071f, (eqModel == 0 || eqModel == 3));
+            hpf.setHighPass (hpfHz, (currentModel == 0 || currentModel == 3) ? 0.80f : 0.7071f, (currentModel == 0 || currentModel == 3));
         else
             hpf.setBypass();
 
         pultecDip.setBypass();
+        highSoften.setBypass();
 
-        if (eqModel == 0) // NEVE 1073
+        if (currentModel == 0) // NEVE 1073 (British Class-A + Transformador Marinair + Inductores)
         {
-            low.setLowShelf (fLow, lowDb, 0.64f);
-            mid.setBell (fMid, midDb, 0.78f + std::abs (midDb) * 0.02f);
-            high.setHighShelf (fHigh, highDb, 0.62f);
+            // Huella de circuito en 0 dB: peso en graves + sedosidad arriba de 16 kHz
+            charLow.setLowShelf  (105.0f,  0.80f, 0.65f);
+            charHigh.setHighShelf(16500.0f,-0.95f, 0.70f);
+
+            // Topología: shelves Baxandall muy anchos y cremosos
+            low.setLowShelf  (fLow, lowDb, 0.56f);
+            mid.setBell      (fMid, midDb, 0.72f + std::abs (midDb) * 0.025f);
+            high.setHighShelf(fHigh, highDb, 0.58f);
+
+            // Saturación de inductor en LOW y MID + calidez base Clase A
+            lowInductorDrive = std::clamp (lowBoost * 0.045f, 0.0f, 0.45f);
+            midInductorDrive = std::clamp (midBoost * 0.050f, 0.0f, 0.48f);
+            stageDrive       = 0.14f + std::clamp ((lowBoost + midBoost + highBoost) * 0.022f, 0.0f, 0.36f);
         }
-        else if (eqModel == 1) // PULTEC EQP-1A
+        else if (currentModel == 1) // PULTEC EQP-1A (Pasivo + Recuperación a Válvula)
         {
-            low.setLowShelf (fLow * 0.90f, lowDb * 1.12f, 0.56f);
-            if (lowDb > 0.4f)
-                pultecDip.setBell (fLow * 2.55f, -lowDb * 0.38f, 1.10f);
-            mid.setBell (fMid, midDb, 0.62f);
-            high.setHighShelf (fHigh * 0.95f, highDb * 1.06f, 0.55f);
+            // Huella de circuito en 0 dB: bloom en sub-graves + aire dulce de tubo
+            charLow.setLowShelf  (68.0f,   0.65f, 0.60f);
+            charHigh.setBell     (12500.0f, 0.60f, 0.62f);
+
+            // Topología Pultec real: Low Shelf gordo + Pultec Trick dip marcado + HIGH como campana ancha
+            low.setLowShelf (fLow * 0.86f, lowDb * 1.18f, 0.52f);
+            if (lowBoost > 0.3f)
+                pultecDip.setBell (fLow * 2.35f, -lowBoost * 0.52f, 1.05f);
+
+            mid.setBell (fMid, midDb, 0.54f);
+            high.setBell (fHigh * 0.86f, highDb * 1.10f, 0.62f);
+            if (highBoost > 0.5f)
+                highSoften.setHighShelf (17500.0f, -highBoost * 0.28f, 0.70f);
+
+            // Saturación de válvula de recuperación al empujar ganancia
+            stageDrive = 0.16f + std::clamp ((lowBoost * 1.1f + highBoost + midBoost * 0.6f) * 0.028f, 0.0f, 0.46f);
         }
-        else if (eqModel == 2) // API 550A (Proportional-Q real)
+        else if (currentModel == 2) // API 550A (Proportional-Q Agresivo + Op-Amp 2520)
         {
-            const float lowQ  = 0.62f + std::abs (lowDb)  * 0.045f;
-            const float midQ  = 0.75f + std::abs (midDb)  * 0.115f;
-            const float highQ = 0.62f + std::abs (highDb) * 0.045f;
-            low.setLowShelf (fLow, lowDb, lowQ);
-            mid.setBell (fMid, midDb, midQ);
-            high.setHighShelf (fHigh * 0.92f, highDb, highQ);
+            // Huella de circuito en 0 dB: sub-graves más firmes + empuje frontal en medios-altos
+            charLow.setLowShelf (44.0f,  -0.55f, 0.72f);
+            charHigh.setBell    (2600.0f, 0.65f, 0.85f);
+
+            // Proportional-Q real: ancho en ajustes suaves, muy focalizado y con pegada al pasar de ±5 dB
+            const float lowQ  = 0.72f + std::abs (lowDb)  * 0.068f;
+            const float midQ  = 0.58f + std::abs (midDb)  * 0.195f;
+            const float highQ = 0.72f + std::abs (highDb) * 0.068f;
+
+            low.setLowShelf  (fLow, lowDb, lowQ);
+            mid.setBell      (fMid, midDb, midQ);
+            high.setHighShelf(fHigh * 0.88f, highDb, highQ);
+
+            // Armónicos impares y mordida del op-amp 2520 al empujar
+            stageDrive = 0.12f + std::clamp ((lowBoost + midBoost * 1.25f + highBoost) * 0.030f, 0.0f, 0.50f);
         }
-        else // SSL 4000E
+        else // SSL 4000E (Black Knob — Limpio, Rápido y Quirúrgico)
         {
-            low.setLowShelf (fLow, lowDb, 0.85f);
-            mid.setBell (fMid, midDb, 1.65f);
-            high.setHighShelf (fHigh, highDb, 0.82f);
+            // Sin coloración en 0 dB para máximo contraste y precisión moderna
+            charLow.setBypass();
+            charHigh.setBypass();
+
+            low.setLowShelf  (fLow, lowDb, 0.92f);
+            mid.setBell      (fMid, midDb, 1.85f);
+            high.setHighShelf(fHigh, highDb, 0.90f);
+
+            stageDrive = 0.0f;
         }
     }
 
     inline void processSample (int ch, float& x) noexcept
     {
+        const auto c = static_cast<size_t> (ch & 1);
+
         x = hpf.processSample (ch, x);
-        x = low.processSample (ch, x);
+        x = charLow.processSample (ch, x);
+        x = charHigh.processSample (ch, x);
+
+        // Banda LOW (con saturación de inductor en Neve 1073)
+        if (lowInductorDrive > 0.001f)
+        {
+            const float preLow = x;
+            const float postLow = low.processSample (ch, x);
+            const float delta = postLow - preLow;
+            const float k = 1.0f + lowInductorDrive * 2.4f;
+            const float satDelta = (std::tanh (delta * k + 0.05f * lowInductorDrive) - std::tanh (0.05f * lowInductorDrive)) / k;
+            x = preLow + satDelta;
+        }
+        else
+        {
+            x = low.processSample (ch, x);
+        }
+
         x = pultecDip.processSample (ch, x);
 
+        // Banda MID (con saturación de inductor en Neve 1073)
         if (midInductorDrive > 0.001f)
         {
             const float preMid = x;
             const float postMid = mid.processSample (ch, x);
-            const float midDelta = postMid - preMid;
-            const float satDelta = std::tanh (midDelta * (1.0f + midInductorDrive * 2.2f)) / (1.0f + midInductorDrive * 2.2f);
+            const float delta = postMid - preMid;
+            const float k = 1.0f + midInductorDrive * 2.6f;
+            const float satDelta = (std::tanh (delta * k + 0.04f * midInductorDrive) - std::tanh (0.04f * midInductorDrive)) / k;
             x = preMid + satDelta;
         }
         else
@@ -652,13 +725,51 @@ public:
         }
 
         x = high.processSample (ch, x);
+        x = highSoften.processSample (ch, x);
+
+        // Saturación de etapa de salida propia del circuito (Neve / Pultec / API)
+        if (stageDrive > 0.001f)
+        {
+            float y = x;
+            if (currentModel == 0) // Neve Class-A (cálido asimétrico)
+            {
+                const float g = 1.0f + stageDrive * 1.15f;
+                const float bias = 0.065f * stageDrive;
+                y = (std::tanh (x * g + bias) - std::tanh (bias)) / (1.0f + stageDrive * 0.92f);
+            }
+            else if (currentModel == 1) // Pultec Tube Make-Up (armónicos pares abiertos)
+            {
+                const float g = 1.0f + stageDrive * 1.25f;
+                const float bias = 0.085f * stageDrive;
+                const float xIn = x * g + bias;
+                const float shaped = (xIn >= 0.0f)
+                    ? (std::tanh (xIn * 1.15f) / 1.15f)
+                    : ((2.0f / juce::MathConstants<float>::pi) * std::atan (xIn * 0.95f) * 1.08f);
+                y = (shaped - std::tanh (bias * 1.15f) / 1.15f) / (1.0f + stageDrive * 0.98f);
+            }
+            else if (currentModel == 2) // API 2520 (armónicos impares simétricos con pegada)
+            {
+                const float g = 1.0f + stageDrive * 1.35f;
+                const float xIn = x * g;
+                y = (xIn / std::sqrt (1.0f + 0.72f * xIn * xIn)) / (1.0f + stageDrive * 1.02f);
+            }
+
+            const float dc = y - dcIn[c] + 0.9992f * dcOut[c];
+            dcIn[c] = y;
+            dcOut[c] = dc;
+            x = dc;
+        }
     }
 
 private:
     double sr = 176400.0;
     int currentModel = 0;
+    float lowInductorDrive = 0.0f;
     float midInductorDrive = 0.0f;
-    TptSvfStereo hpf, low, pultecDip, mid, high;
+    float stageDrive = 0.0f;
+    TptSvfStereo hpf, charLow, charHigh, low, pultecDip, mid, high, highSoften;
+    std::array<float, 2> dcIn { 0.0f, 0.0f };
+    std::array<float, 2> dcOut { 0.0f, 0.0f };
 };
 
 //==============================================================================

@@ -181,11 +181,18 @@ void BenBocazStudioProProcessor::updateFiltersAndChain (bool force)
         lastMonIdx = monIdx;
     }
 
-    if (force || srcIdx != lastSrcIdx || std::abs (drvAmt - lastDrvAmt) > 0.002f)
+    const float mic1X = apvts.getRawParameterValue ("mic1X")->load();
+    const float mic1Y = apvts.getRawParameterValue ("mic1Y")->load();
+    // Ángulo real del micrófono principal frente al cono: 0 = centro (filo), 1 = fuera de eje (cálido)
+    const float offAxisAngle = std::atan2 (std::abs (mic1X), 0.25f + mic1Y);
+    const float offAxisNorm  = std::clamp (offAxisAngle / (juce::MathConstants<float>::pi * 0.42f), 0.0f, 1.0f);
+
+    if (force || srcIdx != lastSrcIdx || std::abs (drvAmt - lastDrvAmt) > 0.002f || std::abs (offAxisNorm - lastOffAxis) > 0.01f)
     {
-        cabVoicing.configure (srcIdx, drvAmt);
-        lastSrcIdx = srcIdx;
-        lastDrvAmt = drvAmt;
+        cabVoicing.configure (srcIdx, drvAmt, offAxisNorm);
+        lastSrcIdx  = srcIdx;
+        lastDrvAmt  = drvAmt;
+        lastOffAxis = offAxisNorm;
     }
 
     const int eqType      = static_cast<int> (apvts.getRawParameterValue ("eqType")->load());
@@ -319,7 +326,9 @@ void BenBocazStudioProProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         acousticEngine.processMultiMicRoom (buffer, cfg);
     }
 
-    const bool hasSpeaker = roomOn && (sourceIdx >= 3);
+    // El breakup de los amplis (4, 5, 6) ahora ocurre pre-sala dentro de CabinetVoicingStage;
+    // en consola solo queda activo para Monitors (3)
+    const bool hasSpeaker = roomOn && (sourceIdx == 3);
     const int order = static_cast<int> (apvts.getRawParameterValue ("chainOrder")->load());
     if (order == 2)
     {

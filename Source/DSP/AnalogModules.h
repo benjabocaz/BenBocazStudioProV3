@@ -550,8 +550,173 @@ private:
 };
 
 //==============================================================================
+// Modelado Físico de Monitores de Estudio (Altec 604, Yamaha NS-10M, JBL Wedge)
+// Incluye Crossover Phase Shift, Beaming Off-Axis, Excursión y Horn Saturation
+//==============================================================================
+class MonitorVoicingStage
+{
+public:
+    void prepare (double sampleRate)
+    {
+        sr = sampleRate > 0.0 ? sampleRate : 44100.0;
+        const float fs = static_cast<float> (sr);
+        atkCoeff  = 1.0f - std::exp (-1.0f / (0.0025f * fs));
+        relCoeff  = 1.0f - std::exp (-1.0f / (0.0550f * fs));
+        lowCoeff  = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 150.0f  / fs);
+        highCoeff = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 2400.0f / fs);
+
+        hpf.prepare (sr);
+        boxRes.prepare (sr);
+        midDip.prepare (sr);
+        hornPeak.prepare (sr);
+        hornNotch.prepare (sr);
+        lpf.prepare (sr);
+        reset();
+    }
+
+    void reset()
+    {
+        apZ1.fill (0.0f);
+        lowState.fill (0.0f);
+        highState.fill (0.0f);
+        lowEnv.fill (0.0f);
+        highEnv.fill (0.0f);
+        dcIn.fill (0.0f);
+        dcOut.fill (0.0f);
+        hpf.reset(); boxRes.reset(); midDip.reset();
+        hornPeak.reset(); hornNotch.reset(); lpf.reset();
+    }
+
+    void configure (bool isMonitorSource, int monitorIdx, float driveAmount, float offAxisNorm)
+    {
+        active = isMonitorSource;
+        if (! active) return;
+
+        model = std::clamp (monitorIdx, 0, 2);
+        drive = std::clamp (driveAmount, 0.0f, 1.0f);
+        const float offAx = std::clamp (offAxisNorm, 0.0f, 1.0f);
+
+        float xoverHz = 1500.0f;
+
+        if (model == 0) // ALTEC MAIN (604 Duplex 15" Coaxial + Multicell Horn)
+        {
+            xoverHz = 1500.0f;
+            const float hfCut = juce::jmap (offAx, 0.0f, 1.0f, 15800.0f, 9800.0f);
+            hpf.setHighPass    (39.0f, 0.78f);
+            boxRes.setPeak     (54.0f, 2.4f, 1.6f);
+            midDip.setPeak     (420.0f, -0.9f, 1.1f);
+            hornPeak.setPeak   (1950.0f, juce::jmap (offAx, 0.0f, 1.0f, 2.2f, 0.6f), 1.05f);
+            hornNotch.setPeak  (3650.0f, -1.8f, 3.2f);
+            lpf.setLowPass     (hfCut, 0.72f);
+        }
+        else if (model == 1) // NS-10 NEARFIELD (Yamaha NS-10M Sealed Box + Cono Blanco)
+        {
+            xoverHz = 2000.0f;
+            const float hfCut = juce::jmap (offAx, 0.0f, 1.0f, 12600.0f, 7800.0f);
+            hpf.setHighPass    (88.0f, 0.68f);
+            boxRes.setPeak     (125.0f, 1.1f, 1.2f);
+            midDip.setPeak     (380.0f, -1.8f, 1.15f);
+            hornPeak.setPeak   (1650.0f, juce::jmap (offAx, 0.0f, 1.0f, 4.8f, 2.6f), 0.92f);
+            hornNotch.setPeak  (5200.0f, -1.4f, 2.4f);
+            lpf.setLowPass     (hfCut, 0.76f);
+        }
+        else // JBL PA WEDGE (12" + Compression Horn)
+        {
+            xoverHz = 1800.0f;
+            const float hfCut = juce::jmap (offAx, 0.0f, 1.0f, 13800.0f, 7200.0f);
+            hpf.setHighPass    (72.0f, 0.85f);
+            boxRes.setPeak     (105.0f, 2.6f, 1.55f);
+            midDip.setPeak     (520.0f, -2.0f, 1.25f);
+            hornPeak.setPeak   (3250.0f, juce::jmap (offAx, 0.0f, 1.0f, 3.8f, 1.0f), 1.30f);
+            hornNotch.setPeak  (6400.0f, -2.2f, 3.0f);
+            lpf.setLowPass     (hfCut, 0.80f);
+        }
+
+        const float t = std::tan (juce::MathConstants<float>::pi * xoverHz / static_cast<float> (sr));
+        apCoeff = (t - 1.0f) / (t + 1.0f);
+    }
+
+    void processBuffer (juce::AudioBuffer<float>& buffer) noexcept
+    {
+        if (! active || buffer.getNumChannels() < 2) return;
+
+        const int numCh = std::min (2, buffer.getNumChannels());
+        const int numSamples = buffer.getNumSamples();
+
+        for (int ch = 0; ch < numCh; ++ch)
+        {
+            const auto c = static_cast<size_t> (ch);
+            auto* data = buffer.getWritePointer (ch);
+
+            for (int i = 0; i < numSamples; ++i)
+            {
+                float x = data[i];
+
+                x = hpf.processSample       (ch, x);
+                x = boxRes.processSample    (ch, x);
+                x = midDip.processSample    (ch, x);
+                x = hornPeak.processSample  (ch, x);
+                x = hornNotch.processSample (ch, x);
+                x = lpf.processSample       (ch, x);
+
+                const float apOut = apCoeff * x + apZ1[c];
+                apZ1[c] = x - apCoeff * apOut;
+                x = apOut;
+
+                lowState[c]  += lowCoeff  * (x - lowState[c]);
+                highState[c] += highCoeff * (x - highState[c]);
+                const float highs = x - highState[c];
+
+                const float absL = std::abs (lowState[c]);
+                lowEnv[c]  += ((absL > lowEnv[c]) ? atkCoeff : relCoeff) * (absL - lowEnv[c]);
+                const float absH = std::abs (highs);
+                highEnv[c] += ((absH > highEnv[c]) ? atkCoeff : relCoeff) * (absH - highEnv[c]);
+
+                float y = x;
+                if (model == 0)
+                {
+                    const float sag = 1.0f / (1.0f + lowEnv[c] * (0.35f + drive * 0.35f));
+                    const float bias = 0.04f * (0.3f + drive);
+                    const float g = (1.06f + drive * 0.55f) * sag;
+                    y = (std::tanh (x * g + bias) - std::tanh (bias)) / (1.0f + drive * 0.38f);
+                }
+                else if (model == 1)
+                {
+                    const float paperComp = 1.0f / (1.0f + lowEnv[c] * 0.45f);
+                    const float g = 1.05f + drive * 0.45f;
+                    y = (x * paperComp * g) / std::sqrt (1.0f + 0.35f * x * x * g * g);
+                    y /= (1.0f + drive * 0.30f);
+                }
+                else
+                {
+                    const float hornDrive = 1.12f + drive * 0.75f + highEnv[c] * 0.95f;
+                    const float satHighs = std::tanh (highs * hornDrive) / hornDrive;
+                    const float lowsComp = highState[c] / (1.0f + lowEnv[c] * 0.42f);
+                    y = lowsComp + satHighs;
+                }
+
+                const float dc = y - dcIn[c] + 0.9990f * dcOut[c];
+                dcIn[c] = y;
+                dcOut[c] = dc;
+                data[i] = dc;
+            }
+        }
+    }
+
+private:
+    double sr = 44100.0;
+    bool active = false;
+    int model = 0;
+    float drive = 0.2f;
+    float apCoeff = 0.0f;
+    float atkCoeff = 0.005f, relCoeff = 0.0004f, lowCoeff = 0.02f, highCoeff = 0.25f;
+
+    std::array<float, 2> apZ1 {}, lowState {}, highState {}, lowEnv {}, highEnv {}, dcIn {}, dcOut {};
+    StereoBiquad hpf, boxRes, midDip, hornPeak, hornNotch, lpf;
+};
+
+//==============================================================================
 // EQ de Consola Analógica TPT-SVF con Carácter Distintivo Real
-// (Huella de circuito en 0 dB + Topologías propias + Saturación por Boost)
 //==============================================================================
 class ConsoleEqWithTubeStage
 {
@@ -600,7 +765,6 @@ public:
 
         currentModel = std::clamp (eqModel, 0, 3);
 
-        // Energía de empuje positivo (solo los boosts saturan el circuito analógico)
         const float lowBoost  = std::max (0.0f, lowDb);
         const float midBoost  = std::max (0.0f, midDb);
         const float highBoost = std::max (0.0f, highDb);
@@ -617,29 +781,24 @@ public:
         pultecDip.setBypass();
         highSoften.setBypass();
 
-        if (currentModel == 0) // NEVE 1073 (British Class-A + Transformador Marinair + Inductores)
+        if (currentModel == 0) // NEVE 1073
         {
-            // Huella de circuito en 0 dB: peso en graves + sedosidad arriba de 16 kHz
             charLow.setLowShelf  (105.0f,  0.80f, 0.65f);
             charHigh.setHighShelf(16500.0f,-0.95f, 0.70f);
 
-            // Topología: shelves Baxandall muy anchos y cremosos
             low.setLowShelf  (fLow, lowDb, 0.56f);
             mid.setBell      (fMid, midDb, 0.72f + std::abs (midDb) * 0.025f);
             high.setHighShelf(fHigh, highDb, 0.58f);
 
-            // Saturación de inductor en LOW y MID + calidez base Clase A
             lowInductorDrive = std::clamp (lowBoost * 0.045f, 0.0f, 0.45f);
             midInductorDrive = std::clamp (midBoost * 0.050f, 0.0f, 0.48f);
             stageDrive       = 0.14f + std::clamp ((lowBoost + midBoost + highBoost) * 0.022f, 0.0f, 0.36f);
         }
-        else if (currentModel == 1) // PULTEC EQP-1A (Pasivo + Recuperación a Válvula)
+        else if (currentModel == 1) // PULTEC EQP-1A
         {
-            // Huella de circuito en 0 dB: bloom en sub-graves + aire dulce de tubo
             charLow.setLowShelf  (68.0f,   0.65f, 0.60f);
             charHigh.setBell     (12500.0f, 0.60f, 0.62f);
 
-            // Topología Pultec real: Low Shelf gordo + Pultec Trick dip marcado + HIGH como campana ancha
             low.setLowShelf (fLow * 0.86f, lowDb * 1.18f, 0.52f);
             if (lowBoost > 0.3f)
                 pultecDip.setBell (fLow * 2.35f, -lowBoost * 0.52f, 1.05f);
@@ -649,16 +808,13 @@ public:
             if (highBoost > 0.5f)
                 highSoften.setHighShelf (17500.0f, -highBoost * 0.28f, 0.70f);
 
-            // Saturación de válvula de recuperación al empujar ganancia
             stageDrive = 0.16f + std::clamp ((lowBoost * 1.1f + highBoost + midBoost * 0.6f) * 0.028f, 0.0f, 0.46f);
         }
-        else if (currentModel == 2) // API 550A (Proportional-Q Agresivo + Op-Amp 2520)
+        else if (currentModel == 2) // API 550A
         {
-            // Huella de circuito en 0 dB: sub-graves más firmes + empuje frontal en medios-altos
             charLow.setLowShelf (44.0f,  -0.55f, 0.72f);
             charHigh.setBell    (2600.0f, 0.65f, 0.85f);
 
-            // Proportional-Q real: ancho en ajustes suaves, muy focalizado y con pegada al pasar de ±5 dB
             const float lowQ  = 0.72f + std::abs (lowDb)  * 0.068f;
             const float midQ  = 0.58f + std::abs (midDb)  * 0.195f;
             const float highQ = 0.72f + std::abs (highDb) * 0.068f;
@@ -667,12 +823,10 @@ public:
             mid.setBell      (fMid, midDb, midQ);
             high.setHighShelf(fHigh * 0.88f, highDb, highQ);
 
-            // Armónicos impares y mordida del op-amp 2520 al empujar
             stageDrive = 0.12f + std::clamp ((lowBoost + midBoost * 1.25f + highBoost) * 0.030f, 0.0f, 0.50f);
         }
-        else // SSL 4000E (Black Knob — Limpio, Rápido y Quirúrgico)
+        else // SSL 4000E
         {
-            // Sin coloración en 0 dB para máximo contraste y precisión moderna
             charLow.setBypass();
             charHigh.setBypass();
 
@@ -692,7 +846,6 @@ public:
         x = charLow.processSample (ch, x);
         x = charHigh.processSample (ch, x);
 
-        // Banda LOW (con saturación de inductor en Neve 1073)
         if (lowInductorDrive > 0.001f)
         {
             const float preLow = x;
@@ -709,7 +862,6 @@ public:
 
         x = pultecDip.processSample (ch, x);
 
-        // Banda MID (con saturación de inductor en Neve 1073)
         if (midInductorDrive > 0.001f)
         {
             const float preMid = x;
@@ -727,17 +879,16 @@ public:
         x = high.processSample (ch, x);
         x = highSoften.processSample (ch, x);
 
-        // Saturación de etapa de salida propia del circuito (Neve / Pultec / API)
         if (stageDrive > 0.001f)
         {
             float y = x;
-            if (currentModel == 0) // Neve Class-A (cálido asimétrico)
+            if (currentModel == 0)
             {
                 const float g = 1.0f + stageDrive * 1.15f;
                 const float bias = 0.065f * stageDrive;
                 y = (std::tanh (x * g + bias) - std::tanh (bias)) / (1.0f + stageDrive * 0.92f);
             }
-            else if (currentModel == 1) // Pultec Tube Make-Up (armónicos pares abiertos)
+            else if (currentModel == 1)
             {
                 const float g = 1.0f + stageDrive * 1.25f;
                 const float bias = 0.085f * stageDrive;
@@ -747,7 +898,7 @@ public:
                     : ((2.0f / juce::MathConstants<float>::pi) * std::atan (xIn * 0.95f) * 1.08f);
                 y = (shaped - std::tanh (bias * 1.15f) / 1.15f) / (1.0f + stageDrive * 0.98f);
             }
-            else if (currentModel == 2) // API 2520 (armónicos impares simétricos con pegada)
+            else if (currentModel == 2)
             {
                 const float g = 1.0f + stageDrive * 1.35f;
                 const float xIn = x * g;
@@ -808,13 +959,13 @@ public:
         stereoLinked = linkStereo;
         allowGrit = enableHarmonicGrit;
 
-        if (compType == 0) // 1176LN (FET Feedback)
+        if (compType == 0) // 1176LN
         {
             ratio = 6.0f; attackMs = 0.35f; relFastMs = 48.0f; relSlowMs = 140.0f;
             kneeDb = 2.5f; isFeedback = true; isOpto = false; isVariMu = false;
             makeupDb = std::clamp ((-thresholdDb - 10.0f) * 0.24f, 0.0f, 7.5f);
         }
-        else if (compType == 1) // LA-2A (Opto T4B Feedback)
+        else if (compType == 1) // LA-2A
         {
             ratio = 3.5f; attackMs = 9.5f; relFastMs = 62.0f; relSlowMs = 680.0f;
             kneeDb = 7.0f; isFeedback = true; isOpto = true; isVariMu = false;
@@ -826,7 +977,7 @@ public:
             kneeDb = 9.5f; isFeedback = false; isOpto = true; isVariMu = true;
             makeupDb = std::clamp ((-thresholdDb - 12.0f) * 0.16f, 0.0f, 5.0f);
         }
-        else // Parallel Crush (1176 All-Buttons-In)
+        else // Parallel Crush
         {
             ratio = 14.0f; attackMs = 0.22f; relFastMs = 40.0f; relSlowMs = 120.0f;
             kneeDb = 2.0f; isFeedback = true; isOpto = true; isVariMu = false;

@@ -1,6 +1,5 @@
 #pragma once
 #include <juce_dsp/juce_dsp.h>
-#include <juce_audio_formats/juce_audio_formats.h>
 #include "AnalogModules.h"
 #include <array>
 #include <vector>
@@ -9,1009 +8,677 @@
 #include <atomic>
 
 //==============================================================================
-// Filtro All-Pass de 1er Orden (Decorrelación de fase transparente)
+// Configuración de la Sala Multi-Micrófono 3D
 //==============================================================================
-class FirstOrderAllPass
+struct MultiMicRoomConfig
+{
+    int modeIdx = 1;            // 0 = Reverb, 1 = Re-Mic
+    int sourceIdx = 0;          // 0=Vocals, 1=Drums, 2=Ensemble, 3=Monitors, 4=GtrMono, 5=GtrStereo, 6=Bass
+    int roomIdx = 0;            // 0=Studio A (12.5m), 1=Studio B (8.5m), 2=Volcano (20m)
+    int wallsLive = 1;          // 0=Tight/Damped, 1=Live/Cedar Wood
+    bool phaseSafe = true;      // ON = Retardo real + Decorrelación All-Pass; OFF = Crudo + Micro-Mod Doubler
+    bool phaseInvert = false;
+    bool mainStereo = false;
+    bool deMudOn = false;
+    int soloStandIdx = -1;      // -1 = Ninguno, 0..3 = Solo atril específico
+
+    float pairSpread = 1.0f;    // Ancho del par 2: ROOM PAIR
+    float roomAirTail = 0.35f;  // Nueva perilla AIR / TAIL (0.0 a 1.0)
+
+    bool roomParallelCrush = false;
+    float roomParallelAmt = 0.35f;
+
+    std::array<float, 4> micX    { 0.0f, -0.32f, -0.52f,  0.52f };
+    std::array<float, 4> micY    { 0.18f, 0.54f,  0.78f,  0.78f };
+    std::array<float, 4> micGain { 1.00f, 0.25f,  0.00f,  0.00f };
+};
+
+//==============================================================================
+// Línea de Retardo con Interpolación Lineal (para retardos físicos y modulación)
+//==============================================================================
+class SimpleDelayLine
 {
 public:
-    void prepare (double sampleRate, float freqHz)
+    void prepare (int maxSamples)
     {
-        const double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
-        const float f = std::clamp (freqHz, 40.0f, static_cast<float> (sr * 0.42));
-        const float t = std::tan (juce::MathConstants<float>::pi * f / static_cast<float> (sr));
-        coeff = (t - 1.0f) / (t + 1.0f);
-        reset();
+        buffer.assign (static_cast<size_t> (std::max (64, maxSamples)), 0.0f);
+        writePos = 0;
     }
 
-    void reset() { z1 = 0.0f; }
-
-    inline float processSample (float x) noexcept
+    void reset()
     {
-        const float y = coeff * x + z1;
-        z1 = x - coeff * y;
+        std::fill (buffer.begin(), buffer.end(), 0.0f);
+        writePos = 0;
+    }
+
+    inline void push (float x) noexcept
+    {
+        buffer[static_cast<size_t> (writePos)] = x;
+        if (++writePos >= static_cast<int> (buffer.size()))
+            writePos = 0;
+    }
+
+    inline float read (float delaySamples) const noexcept
+    {
+        const int size = static_cast<int> (buffer.size());
+        const float d = std::clamp (delaySamples, 1.0f, static_cast<float> (size - 2));
+        float readPos = static_cast<float> (writePos) - d;
+        while (readPos < 0.0f) readPos += static_cast<float> (size);
+
+        const int i0 = static_cast<int> (readPos) % size;
+        const int i1 = (i0 + 1) % size;
+        const float frac = readPos - std::floor (readPos);
+        return buffer[static_cast<size_t> (i0)] * (1.0f - frac) + buffer[static_cast<size_t> (i1)] * frac;
+    }
+
+private:
+    std::vector<float> buffer;
+    int writePos = 0;
+};
+
+//==============================================================================
+// Filtro All-Pass Corto (para Decorrelación de Fase y Micro-Difusión de Aire)
+//==============================================================================
+class ShortAllPass
+{
+public:
+    void prepare (int delaySamples, float feedback = 0.5f)
+    {
+        size = std::max (4, delaySamples);
+        buf.assign (static_cast<size_t> (size), 0.0f);
+        g = std::clamp (feedback, -0.85f, 0.85f);
+        idx = 0;
+    }
+
+    void reset()
+    {
+        std::fill (buf.begin(), buf.end(), 0.0f);
+        idx = 0;
+    }
+
+    inline float process (float x) noexcept
+    {
+        const float delayed = buf[static_cast<size_t> (idx)];
+        const float y = -g * x + delayed;
+        buf[static_cast<size_t> (idx)] = x + g * y;
+        if (++idx >= size) idx = 0;
         return y;
     }
 
 private:
-    float coeff = 0.0f;
-    float z1 = 0.0f;
+    std::vector<float> buf;
+    int size = 16;
+    int idx = 0;
+    float g = 0.5f;
 };
 
 //==============================================================================
-// Difusor All-Pass Estéreo de 4 Etapas
+// FDN Estéreo de 8 Líneas con Matriz Hadamard (Sala y Echo Chambers)
 //==============================================================================
-class StereoAllPassDiffuser
+class HadamardFdn8
 {
 public:
-    static constexpr int NumStages = 4;
-
-    void prepare (double sampleRate)
+    void prepare (double sampleRate, const std::array<float, 8>& baseDelaysMs)
     {
         sr = sampleRate > 0.0 ? sampleRate : 44100.0;
-        static constexpr std::array<float, NumStages> delayMsL { 4.3f, 7.1f, 11.3f, 16.7f };
-        static constexpr std::array<float, NumStages> delayMsR { 4.7f, 7.9f, 12.1f, 17.9f };
-
-        for (size_t s = 0; s < NumStages; ++s)
+        for (size_t i = 0; i < 8; ++i)
         {
-            const size_t lenL = std::max<size_t> (16, static_cast<size_t> (delayMsL[s] * 0.001f * static_cast<float> (sr)));
-            const size_t lenR = std::max<size_t> (16, static_cast<size_t> (delayMsR[s] * 0.001f * static_cast<float> (sr)));
-            bufL[s].assign (lenL, 0.0f);
-            bufR[s].assign (lenR, 0.0f);
-            posL[s] = 0;
-            posR[s] = 0;
+            const int maxSamps = static_cast<int> (std::ceil (baseDelaysMs[i] * 0.001 * sr * 2.5)) + 64;
+            lines[i].prepare (maxSamps);
+            baseDelays[i] = baseDelaysMs[i] * 0.001f * static_cast<float> (sr);
         }
-    }
-
-    void reset()
-    {
-        for (size_t s = 0; s < NumStages; ++s)
-        {
-            std::fill (bufL[s].begin(), bufL[s].end(), 0.0f);
-            std::fill (bufR[s].begin(), bufR[s].end(), 0.0f);
-            posL[s] = 0;
-            posR[s] = 0;
-        }
-    }
-
-    inline void processStereo (float& l, float& r, float diffusion) noexcept
-    {
-        const float g = std::clamp (diffusion, 0.0f, 0.68f);
-        if (g < 0.005f) return;
-
-        for (size_t s = 0; s < NumStages; ++s)
-        {
-            auto& bL = bufL[s];
-            const size_t pL = posL[s];
-            const float dL = bL[pL];
-            const float vL = l - g * dL;
-            bL[pL] = vL;
-            l = dL + g * vL;
-            posL[s] = (pL + 1 < bL.size()) ? (pL + 1) : 0;
-
-            auto& bR = bufR[s];
-            const size_t pR = posR[s];
-            const float dR = bR[pR];
-            const float vR = r - g * dR;
-            bR[pR] = vR;
-            r = dR + g * vR;
-            posR[s] = (pR + 1 < bR.size()) ? (pR + 1) : 0;
-        }
-    }
-
-private:
-    double sr = 44100.0;
-    std::array<std::vector<float>, NumStages> bufL, bufR;
-    std::array<size_t, NumStages> posL {}, posR {};
-};
-
-//==============================================================================
-// Hadamard FDN de 8 Líneas con Decaimiento en 2 Bandas (HF Damping + LF Decay)
-//==============================================================================
-class HadamardFDN
-{
-public:
-    static constexpr int NumLines = 8;
-
-    void prepare (double sampleRate)
-    {
-        sr = sampleRate > 0.0 ? sampleRate : 44100.0;
-        size_t needed = static_cast<size_t> (sr * 0.25);
-        bufSize = 1;
-        while (bufSize < needed) bufSize <<= 1;
-        mask = bufSize - 1;
-
-        for (auto& line : lines) line.assign (bufSize, 0.0f);
         reset();
     }
 
     void reset()
     {
-        for (auto& line : lines) std::fill (line.begin(), line.end(), 0.0f);
+        for (auto& l : lines) l.reset();
         lpState.fill (0.0f);
         hpState.fill (0.0f);
-        dcIn.fill (0.0f);
-        dcOut.fill (0.0f);
-        writePos = 0;
-        for (int i = 0; i < NumLines; ++i)
-            lfoPhase[static_cast<size_t> (i)] = static_cast<float> (i) * 0.785f;
     }
 
-    void setProfile (const std::array<float, NumLines>& delayMs, float rt60Seconds,
-                     float dampingAmount, float modDepthMs, float lowDecayCutHz = 120.0f)
+    inline void processStereo (float inL, float inR, float& outL, float& outR,
+                               float sizeScale, float feedback, float dampCoeff, float hpCoeff) noexcept
     {
-        rt60 = std::clamp (rt60Seconds, 0.18f, 7.5f);
-        damp = std::clamp (dampingAmount, 0.05f, 0.88f);
-        modDepthSamples = modDepthMs * 0.001f * static_cast<float> (sr);
-
-        const float cutHz = std::clamp (lowDecayCutHz, 20.0f, 450.0f);
-        hpCoeff = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * cutHz / static_cast<float> (sr));
-
-        for (size_t i = 0; i < NumLines; ++i)
+        std::array<float, 8> tap {};
+        for (size_t i = 0; i < 8; ++i)
         {
-            baseDelaySamples[i] = std::clamp (delayMs[i] * 0.001f * static_cast<float> (sr),
-                                              32.0f, static_cast<float> (bufSize - 64));
-            const float delaySec = baseDelaySamples[i] / static_cast<float> (sr);
-            lineGain[i] = std::min (0.988f, std::pow (10.0f, -3.0f * delaySec / rt60));
-        }
-    }
-
-    inline void processStereo (float inL, float inR, float& outL, float& outR) noexcept
-    {
-        static constexpr std::array<float, NumLines> lfoRates {
-            0.17f, 0.23f, 0.29f, 0.37f, 0.41f, 0.47f, 0.53f, 0.61f
-        };
-
-        std::array<float, NumLines> delayed {};
-
-        for (size_t i = 0; i < NumLines; ++i)
-        {
-            lfoPhase[i] += juce::MathConstants<float>::twoPi * lfoRates[i] / static_cast<float> (sr);
-            if (lfoPhase[i] > juce::MathConstants<float>::twoPi)
-                lfoPhase[i] -= juce::MathConstants<float>::twoPi;
-
-            const float d = baseDelaySamples[i] + std::sin (lfoPhase[i]) * modDepthSamples;
-            const auto dInt = static_cast<size_t> (d);
-            const float frac = d - static_cast<float> (dInt);
-
-            const size_t idx0 = (writePos - dInt) & mask;
-            const size_t idx1 = (idx0 - 1) & mask;
-            const float sample = lines[i][idx0] * (1.0f - frac) + lines[i][idx1] * frac;
-
-            lpState[i] = sample * (1.0f - damp) + lpState[i] * damp;
-
-            hpState[i] += hpCoeff * (lpState[i] - hpState[i]);
-            const float shaped = lpState[i] - hpState[i] * 0.32f;
-
-            const float dc = shaped - dcIn[i] + 0.996f * dcOut[i];
-            dcIn[i] = shaped;
-            dcOut[i] = dc;
-            delayed[i] = dc * lineGain[i];
+            float s = lines[i].read (baseDelays[i] * sizeScale);
+            // Damping de agudos (absorción de paredes/aire)
+            lpState[i] += dampCoeff * (s - lpState[i]);
+            s = lpState[i];
+            // HPF suave para evitar acumulación de subgraves
+            hpState[i] += hpCoeff * (s - hpState[i]);
+            s -= hpState[i];
+            tap[i] = s;
         }
 
-        const float a0 = delayed[0] + delayed[1], a1 = delayed[0] - delayed[1];
-        const float a2 = delayed[2] + delayed[3], a3 = delayed[2] - delayed[3];
-        const float a4 = delayed[4] + delayed[5], a5 = delayed[4] - delayed[5];
-        const float a6 = delayed[6] + delayed[7], a7 = delayed[6] - delayed[7];
+        // Matriz Hadamard 8x8 normalizada (1 / sqrt(8) = 0.35355339)
+        std::array<float, 8> h = tap;
+        for (int step = 1; step < 8; step <<= 1)
+        {
+            for (int i = 0; i < 8; i += step * 2)
+            {
+                for (int j = 0; j < step; ++j)
+                {
+                    const float a = h[static_cast<size_t> (i + j)];
+                    const float b = h[static_cast<size_t> (i + j + step)];
+                    h[static_cast<size_t> (i + j)]        = a + b;
+                    h[static_cast<size_t> (i + j + step)] = a - b;
+                }
+            }
+        }
+        constexpr float norm = 0.35355339f;
 
-        const float b0 = a0 + a2, b1 = a1 + a3, b2 = a0 - a2, b3 = a1 - a3;
-        const float b4 = a4 + a6, b5 = a5 + a7, b6 = a4 - a6, b7 = a5 - a7;
+        const float fb = std::clamp (feedback, 0.0f, 0.965f);
+        for (size_t i = 0; i < 8; ++i)
+        {
+            const float inject = ((i & 1) == 0 ? inL : inR) * 0.35f;
+            lines[i].push (inject + h[i] * norm * fb);
+        }
 
-        constexpr float norm = 0.35355339059f;
-        std::array<float, NumLines> mixed {
-            (b0 + b4) * norm, (b1 + b5) * norm, (b2 + b6) * norm, (b3 + b7) * norm,
-            (b0 - b4) * norm, (b1 - b5) * norm, (b2 - b6) * norm, (b3 - b7) * norm
-        };
-
-        const float sL = inL * 0.35f, sR = inR * 0.35f;
-        lines[0][writePos] = mixed[0] + sL; lines[1][writePos] = mixed[1] + sR;
-        lines[2][writePos] = mixed[2] + sR; lines[3][writePos] = mixed[3] + sL;
-        lines[4][writePos] = mixed[4] - sL; lines[5][writePos] = mixed[5] - sR;
-        lines[6][writePos] = mixed[6] - sR; lines[7][writePos] = mixed[7] - sL;
-        writePos = (writePos + 1) & mask;
-
-        outL = 0.32f * (delayed[0] - delayed[3] + delayed[5] - delayed[6]);
-        outR = 0.32f * (delayed[1] - delayed[2] + delayed[4] - delayed[7]);
+        outL = (tap[0] + tap[2] + tap[4] + tap[6]) * 0.35f;
+        outR = (tap[1] + tap[3] + tap[5] + tap[7]) * 0.35f;
     }
 
 private:
     double sr = 44100.0;
-    size_t bufSize = 16384, mask = 16383, writePos = 0;
-    float rt60 = 1.5f, damp = 0.35f, hpCoeff = 0.015f, modDepthSamples = 8.0f;
-    std::array<std::vector<float>, NumLines> lines;
-    std::array<float, NumLines> baseDelaySamples {}, lineGain {}, lpState {}, hpState {}, dcIn {}, dcOut {}, lfoPhase {};
+    std::array<SimpleDelayLine, 8> lines;
+    std::array<float, 8> baseDelays {};
+    std::array<float, 8> lpState {};
+    std::array<float, 8> hpState {};
 };
 
-struct MultiMicRoomConfig
-{
-    int modeIdx = 1;       // 0: Reverb, 1: Re-Mic
-    int sourceIdx = 0;     // 0: Vocals, 1: Drums, 2: Ensemble, 3: Monitors, 4: Guitar Mono, 5: Guitar Stereo, 6: Bass Amp
-    int roomIdx = 0;       // 0: Studio A (Shangri-La), 1: Studio B (Canyon), 2: Volcano (~20m)
-    int wallsLive = 1;     // 0: Tight / Damped, 1: Live / Cedar Wood
-    bool phaseSafe = true;
-    bool phaseInvert = false;
-    bool mainStereo = false;
-    bool deMudOn = false;
-    int soloStandIdx = -1;
-    float pairSpread = 1.0f;
-    float deccaWidth = 1.0f;
-
-    bool roomParallelCrush = false;
-    float roomParallelAmt  = 0.45f;
-
-    std::array<float, 4> micX    { 0.0f, -0.32f, -0.52f, 0.52f };
-    std::array<float, 4> micY    { 0.18f, 0.54f,  0.78f, 0.78f };
-    std::array<float, 4> micGain { 1.0f,  0.25f,  0.0f,  0.0f };
-};
-
+//==============================================================================
+// Motor Acústico Principal: Sala 3D Multi-Mic + Echo Chambers + Custom WAV IR
+//==============================================================================
 class AcousticEngine
 {
 public:
-    void prepare (double sampleRate, int maxBlockSize)
+    void prepare (double sampleRate, int samplesPerBlock)
     {
         sr = sampleRate > 0.0 ? sampleRate : 44100.0;
-        smoothCoeff = 1.0f - std::exp (-1.0f / (0.030f * static_cast<float> (sr)));
-        smoothInitialized = false;
+        const int maxRoomDelay = static_cast<int> (sr * 0.25) + 64; // hasta 250 ms
+        const int maxPreDelay  = static_cast<int> (sr * 0.20) + 64;
 
-        size_t needed = static_cast<size_t> (sr * 0.25);
-        erBufSize = 1;
-        while (erBufSize < needed) erBufSize <<= 1;
-        erMask = erBufSize - 1;
+        srcDelayL.prepare (maxRoomDelay);
+        srcDelayR.prepare (maxRoomDelay);
+        erDelayL.prepare (maxRoomDelay);
+        erDelayR.prepare (maxRoomDelay);
+        chPreDelayL.prepare (maxPreDelay);
+        chPreDelayR.prepare (maxPreDelay);
 
-        erBufL.assign (erBufSize, 0.0f);
-        erBufR.assign (erBufSize, 0.0f);
-        erWritePos = 0;
+        // Decorreladores All-Pass para PHASE SAFE (primos cortos en muestras)
+        const float srScale = static_cast<float> (sr / 44100.0);
+        apRoomL[0].prepare (static_cast<int> (19 * srScale), 0.52f);
+        apRoomL[1].prepare (static_cast<int> (43 * srScale), 0.48f);
+        apRoomR[0].prepare (static_cast<int> (23 * srScale), 0.52f);
+        apRoomR[1].prepare (static_cast<int> (53 * srScale), 0.48f);
 
-        roomDiffuser.prepare (sr);
-        chamberDiffuser.prepare (sr);
-        roomFdn.prepare (sr);
-        chamberFdn.prepare (sr);
-        roomAmbComp.prepare (sr);
-        chamberAmbComp.prepare (sr);
+        apFarL[0].prepare  (static_cast<int> (31 * srScale), 0.55f);
+        apFarL[1].prepare  (static_cast<int> (67 * srScale), 0.50f);
+        apFarR[0].prepare  (static_cast<int> (37 * srScale), 0.55f);
+        apFarR[1].prepare  (static_cast<int> (79 * srScale), 0.50f);
 
-        // Decorreladores All-Pass sutiles (Phase Safe + difusión de Ensemble)
-        pairDecorL.prepare (sr, 520.0f);
-        pairDecorR.prepare (sr, 790.0f);
-        farLDecor.prepare  (sr, 640.0f);
-        farRDecor.prepare  (sr, 970.0f);
-        ensSpreadL.prepare (sr, 380.0f);
-        ensSpreadR.prepare (sr, 1120.0f);
+        // FDN Sala (tiempos primos en ms)
+        roomFdn.prepare (sr, { 11.3f, 15.7f, 21.1f, 27.7f, 34.9f, 43.3f, 52.1f, 61.9f });
 
-        // Voicing automático de micrófonos según fuente (LDC, Cinta, Dinámico+Cinta, SDC)
-        mainMicVoice.prepare (sr);
-        ambMicVoice.prepare (sr);
+        // FDN Echo Chambers (tiempos más densos y brillantes)
+        chamberFdn.prepare (sr, { 13.1f, 19.3f, 26.9f, 35.3f, 46.1f, 58.7f, 71.9f, 86.3f });
 
-        midPhaseHpf.prepare (sr);   midPhaseHpf.setHighPass (120.0f, 0.7071f);
-        airPhaseHpf.prepare (sr);   airPhaseHpf.setHighPass (160.0f, 0.7071f);
-        deccaPhaseHpf.prepare (sr); deccaPhaseHpf.setHighPass (160.0f, 0.7071f);
-        mainProxShelf.prepare (sr);
+        roomAirShelf.prepare (sr);
+        roomHpfProtect.prepare (sr);
+        farHpfProtect.prepare (sr);
+        roomCrushComp.prepare (sr);
+        roomCrushComp.configure (3, -24.0f, true, true, true);
 
-        roomLowShelf.prepare (sr);
-        roomMidPeak.prepare (sr);
-        roomHighShelf.prepare (sr);
-        roomBoomDip.prepare (sr);   roomBoomDip.setPeak (240.0f, -2.4f, 1.05f);
-        roomSubHpf.prepare (sr);    roomSubHpf.setHighPass (48.0f, 0.7071f);
-        deMudHpf.prepare (sr);      deMudHpf.setHighPass (165.0f, 0.7071f);
-        deMudDip.prepare (sr);      deMudDip.setPeak (275.0f, -4.5f, 1.1f);
+        chamberHpf.prepare (sr);
+        chamberTone.prepare (sr);
+        chamberCrushComp.prepare (sr);
+        chamberCrushComp.configure (3, -24.0f, true, true, true);
 
-        chamberInHpf.prepare (sr);
-        chamberInLpf.prepare (sr);
-        chamberVoicePeak.prepare (sr);
-        chamberBoomDip.prepare (sr);  chamberBoomDip.setPeak (240.0f, -2.2f, 1.05f);
-        chamberSubHpf.prepare (sr);   chamberSubHpf.setHighPass (55.0f, 0.7071f);
-        chamberDeMudHpf.prepare (sr); chamberDeMudHpf.setHighPass (165.0f, 0.7071f);
-        chamberDeMudDip.prepare (sr); chamberDeMudDip.setPeak (275.0f, -4.5f, 1.1f);
+        juce::dsp::ProcessSpec spec { sr, static_cast<juce::uint32> (std::max (1, samplesPerBlock)), 2 };
+        customConvolution.prepare (spec);
 
-        juce::dsp::ProcessSpec spec;
-        spec.sampleRate = sr;
-        spec.maximumBlockSize = static_cast<juce::uint32> (maxBlockSize);
-        spec.numChannels = 2;
+        lfoPhaseL = 0.0f;
+        lfoPhaseR = 1.5707963f; // 90 grados de desfase
 
-        preDelay.prepare (spec);
-        customConvolver.prepare (spec);
-        mainAirLpL = mainAirLpR = 0.0f;
-        airLpL = airLpR = 0.0f;
-        erDampLpL = erDampLpR = 0.0f;
-        smLowDb = smMidDb = smHighDb = 0.0f;
-        lastProxDb = -99.0f;
-        lastChamberIdx = -1;
-        lastPhaseSrcIdx = -1;
+        reset();
     }
 
     void reset()
     {
-        std::fill (erBufL.begin(), erBufL.end(), 0.0f);
-        std::fill (erBufR.begin(), erBufR.end(), 0.0f);
-        erWritePos = 0;
-        smoothInitialized = false;
-        pairDecorL.reset(); pairDecorR.reset(); farLDecor.reset(); farRDecor.reset();
-        ensSpreadL.reset(); ensSpreadR.reset();
-        mainMicVoice.reset(); ambMicVoice.reset();
-        roomDiffuser.reset(); chamberDiffuser.reset();
-        roomFdn.reset(); chamberFdn.reset();
-        roomAmbComp.reset(); chamberAmbComp.reset();
-        midPhaseHpf.reset(); airPhaseHpf.reset(); deccaPhaseHpf.reset();
-        mainProxShelf.reset();
-        roomLowShelf.reset(); roomMidPeak.reset(); roomHighShelf.reset();
-        roomBoomDip.reset(); roomSubHpf.reset();
-        deMudHpf.reset(); deMudDip.reset();
-        chamberInHpf.reset(); chamberInLpf.reset(); chamberVoicePeak.reset();
-        chamberBoomDip.reset(); chamberSubHpf.reset();
-        chamberDeMudHpf.reset(); chamberDeMudDip.reset();
-        preDelay.reset(); customConvolver.reset();
-        mainAirLpL = mainAirLpR = 0.0f;
-        airLpL = airLpR = 0.0f;
-        erDampLpL = erDampLpR = 0.0f;
+        srcDelayL.reset(); srcDelayR.reset();
+        erDelayL.reset(); erDelayR.reset();
+        chPreDelayL.reset(); chPreDelayR.reset();
+        for (int i = 0; i < 2; ++i)
+        {
+            apRoomL[i].reset(); apRoomR[i].reset();
+            apFarL[i].reset();  apFarR[i].reset();
+        }
+        roomFdn.reset();
+        chamberFdn.reset();
+        roomAirShelf.reset();
+        roomHpfProtect.reset();
+        farHpfProtect.reset();
+        roomCrushComp.reset();
+        chamberHpf.reset();
+        chamberTone.reset();
+        chamberCrushComp.reset();
+        customConvolution.reset();
+        airLpState.fill (0.0f);
+        lastAirTail = -1.0f;
+        lastChamberType = -1;
     }
 
     void loadCustomImpulseResponse (const juce::File& file)
     {
         if (! file.existsAsFile()) return;
-        customConvolver.loadImpulseResponse (file,
-                                             juce::dsp::Convolution::Stereo::yes,
-                                             juce::dsp::Convolution::Trim::yes,
-                                             0);
-        customIRLoaded.store (true);
-        loadedIRName = file.getFileNameWithoutExtension();
+        customConvolution.loadImpulseResponse (file,
+                                               juce::dsp::Convolution::Stereo::yes,
+                                               juce::dsp::Convolution::Trim::yes,
+                                               0);
+        loadedIrName = file.getFileNameWithoutExtension();
+        hasCustomIr.store (true);
     }
 
-    juce::String getLoadedIRName() const { return loadedIRName; }
+    juce::String getLoadedIRName() const { return loadedIrName; }
 
+    //==========================================================================
+    // PROCESAMIENTO DE SALA 3D MULTI-MICRÓFONO
+    //==========================================================================
     void processMultiMicRoom (juce::AudioBuffer<float>& buffer, const MultiMicRoomConfig& cfg)
     {
         if (buffer.getNumChannels() < 2) return;
-
-        // HPF adaptativo de fase + Voicing automático de micrófonos según el ROOM SOURCE
-        if (cfg.sourceIdx != lastPhaseSrcIdx)
-        {
-            float pairCut = 120.0f, farCut = 160.0f;
-            switch (std::clamp (cfg.sourceIdx, 0, 6))
-            {
-                case 0: // Vocals: MAIN = Condensador LDC cálido/sedoso; Sala = LDC limpio
-                    pairCut = 155.0f; farCut = 210.0f;
-                    mainMicVoice.setHighShelf (10500.0f, 1.4f);
-                    ambMicVoice.setHighShelf  (9500.0f, -0.8f);
-                    break;
-                case 1: // Drums: Sala = Micrófonos de Cinta (tipo Coles 4038 / RCA: doman platillos y engordan)
-                    pairCut = 95.0f; farCut = 130.0f;
-                    mainMicVoice.setPeak      (3200.0f, 0.8f, 0.9f);
-                    ambMicVoice.setHighShelf  (5800.0f, -3.2f);
-                    break;
-                case 2: // Ensemble: Condensadores SDC abiertos y detallados
-                    pairCut = 110.0f; farCut = 145.0f;
-                    mainMicVoice.setHighShelf (12000.0f, 1.2f);
-                    ambMicVoice.setHighShelf  (11000.0f, 1.0f);
-                    break;
-                case 3: // Monitors (Swedien): Referencia neutral
-                    pairCut = 110.0f; farCut = 150.0f;
-                    mainMicVoice.setBypass();
-                    ambMicVoice.setBypass();
-                    break;
-                case 4:
-                case 5: // Guitar Cab: MAIN = Dinámico + Cinta (foco en medios); Sala = Cinta suave
-                    pairCut = 125.0f; farCut = 170.0f;
-                    mainMicVoice.setPeak      (2400.0f, 1.2f, 1.1f);
-                    ambMicVoice.setHighShelf  (6500.0f, -2.0f);
-                    break;
-                case 6: // Bass Amp: MAIN = Dinámico de diafragma grande; Sala = Cinta cálida
-                    pairCut = 165.0f; farCut = 220.0f;
-                    mainMicVoice.setLowShelf  (95.0f, 1.2f);
-                    ambMicVoice.setHighShelf  (5500.0f, -2.2f);
-                    break;
-            }
-            midPhaseHpf.setHighPass (pairCut, 0.7071f);
-            airPhaseHpf.setHighPass (farCut, 0.7071f);
-            deccaPhaseHpf.setHighPass (farCut, 0.7071f);
-            lastPhaseSrcIdx = cfg.sourceIdx;
-        }
-
-        static constexpr std::array<float, 8> studioADelays { 29.3f, 37.1f, 43.7f, 53.3f, 61.9f, 71.1f, 83.3f, 97.7f };
-        static constexpr std::array<float, 8> studioBDelays { 17.3f, 21.1f, 26.9f, 31.7f, 37.9f, 43.1f, 51.3f, 59.7f };
-        static constexpr std::array<float, 8> volcanoDelays { 38.3f, 47.9f, 58.7f, 70.1f, 82.9f, 96.7f, 111.7f, 128.3f };
-
-        const int rIdx = std::clamp (cfg.roomIdx, 0, 2);
-        const int wLive = (cfg.wallsLive != 0) ? 1 : 0;
-
-        float targetLowDb = 0.0f, targetMidDb = 0.0f, targetHighDb = 0.0f;
-        float lowFreq = 125.0f, midFreq = 1350.0f, midQ = 0.95f, highFreq = 8500.0f;
-
-        if (rIdx == 0) // Studio A (Shangri-La — 12.5m)
-        {
-            lowFreq = 125.0f;  midFreq = 1350.0f; midQ = 0.95f; highFreq = 8500.0f;
-            targetLowDb  = wLive ?  1.8f :  0.3f;
-            targetMidDb  = wLive ?  0.9f : -0.7f;
-            targetHighDb = wLive ?  1.4f : -1.8f;
-            roomSubHpf.setHighPass (wLive ? 45.0f : 62.0f, 0.7071f);
-            roomBoomDip.setPeak (235.0f, wLive ? -1.8f : -3.2f, 1.05f);
-        }
-        else if (rIdx == 1) // Studio B (Canyon — 8.5m)
-        {
-            lowFreq = 145.0f;  midFreq = 2150.0f; midQ = 1.05f; highFreq = 7200.0f;
-            targetLowDb  = wLive ?  1.0f : -0.6f;
-            targetMidDb  = wLive ?  2.1f :  0.7f;
-            targetHighDb = wLive ?  0.4f : -2.6f;
-            roomSubHpf.setHighPass (wLive ? 54.0f : 70.0f, 0.72f);
-            roomBoomDip.setPeak (260.0f, wLive ? -2.2f : -3.6f, 1.15f);
-        }
-        else // Volcano (20.0m expansivo)
-        {
-            if (wLive)
-            {
-                lowFreq = 110.0f;  midFreq = 880.0f;  midQ = 0.85f; highFreq = 9500.0f;
-                targetLowDb  =  2.5f;
-                targetMidDb  =  1.3f;
-                targetHighDb =  1.8f;
-                roomSubHpf.setHighPass (40.0f, 0.7071f);
-                roomBoomDip.setPeak (220.0f, -2.0f, 1.0f);
-            }
-            else
-            {
-                lowFreq = 130.0f;  midFreq = 1650.0f; midQ = 1.00f; highFreq = 7500.0f;
-                targetLowDb  =  0.5f;
-                targetMidDb  =  0.4f;
-                targetHighDb = -2.4f;
-                roomSubHpf.setHighPass (64.0f, 0.75f);
-                roomBoomDip.setPeak (250.0f, -3.5f, 1.15f);
-            }
-        }
-
-        float baseRt60 = 1.85f, damp = 0.35f, lfCutHz = 110.0f;
-        if (rIdx == 0)
-        {
-            baseRt60 = wLive ? 1.85f : 0.95f;
-            damp     = wLive ? 0.25f : 0.62f;
-            lfCutHz  = wLive ? 95.0f : 185.0f;
-        }
-        else if (rIdx == 1)
-        {
-            baseRt60 = wLive ? 1.05f : 0.52f;
-            damp     = wLive ? 0.32f : 0.68f;
-            lfCutHz  = wLive ? 115.0f : 210.0f;
-        }
-        else
-        {
-            baseRt60 = wLive ? 2.65f : 0.90f;
-            damp     = wLive ? 0.19f : 0.64f;
-            lfCutHz  = wLive ? 85.0f : 195.0f;
-        }
-
-        const auto& activeDelays = (rIdx == 0) ? studioADelays : ((rIdx == 1) ? studioBDelays : volcanoDelays);
-        roomFdn.setProfile (activeDelays, baseRt60, damp, wLive ? 0.48f : 0.18f, lfCutHz);
-
-        const float roomDiffAmt = wLive ? (rIdx == 2 ? 0.54f : 0.46f) : 0.24f;
-        const float erDampCoeff = wLive ? 0.14f : 0.56f;
-
-        if (cfg.roomParallelCrush)
-            roomAmbComp.configure (3, -24.0f, true, true, false);
-
-        const float roomW = (rIdx == 0) ? 15.0f : ((rIdx == 1) ? 10.5f : 14.0f);
-        const float roomD = (rIdx == 0) ? 12.5f : ((rIdx == 1) ? 8.5f  : 20.0f);
-        const float roomH = (rIdx == 0) ? 4.8f  : ((rIdx == 1) ? 3.4f  : 6.2f);
-        const float speed = 343.0f;
-        const float wallRef = (rIdx == 2) ? (wLive ? 0.80f : 0.38f)
-                                          : (wLive ? 0.72f : 0.40f);
-
-        // Geometría vertical (z_s) y pesos de reflexión reales según la fuente
-        float srcHeightZ = 1.25f;
-        float sideErGain = 1.0f;
-        float floorErGain = 1.0f;
-        float proxMaxDb = 2.4f;
-
-        switch (std::clamp (cfg.sourceIdx, 0, 6))
-        {
-            case 0: // Vocals: boca alta (~1.65m), proyección frontal, proximidad más sensible
-                srcHeightZ = 1.65f; sideErGain = 0.88f; floorErGain = 0.78f; proxMaxDb = 3.2f; break;
-            case 1: // Drums: bombo/caja bajos (~0.90m), energía 360° que excita fuerte piso y paredes
-                srcHeightZ = 0.90f; sideErGain = 1.22f; floorErGain = 1.28f; proxMaxDb = 1.8f; break;
-            case 2: // Ensemble: fuente ancha en semicírculo, énfasis lateral suave
-                srcHeightZ = 1.30f; sideErGain = 1.18f; floorErGain = 0.95f; proxMaxDb = 1.6f; break;
-            case 3: // Monitors
-                srcHeightZ = 1.40f; sideErGain = 1.00f; floorErGain = 0.95f; proxMaxDb = 2.0f; break;
-            default: // Guitar / Bass Amps: gabinetes cerca del piso (~0.55m)
-                srcHeightZ = 0.55f; sideErGain = 1.05f; floorErGain = 1.18f; proxMaxDb = 2.6f; break;
-        }
-        const float micHeightZ = 1.45f;
-
-        const float farW = std::clamp (cfg.deccaWidth, 0.2f, 1.5f);
-
-        std::array<float, 4> distMeters {};
-        std::array<float, 4> targetPanL {}, targetPanR {};
-        std::array<float, 4> targetDelay {};
-        std::array<float, 4> targetGain {};
-        std::array<float, 4> targetMicY {};
-        std::array<float, 4> targetDirWeight {};
-        std::array<float, 4> targetAmbWeight {};
-
-        float sumW = 0.0f, avgMx = 0.0f, avgMy = 0.0f;
-
-        for (size_t s = 0; s < 4; ++s)
-        {
-            const bool mutedBySolo = (cfg.soloStandIdx >= 0 && cfg.soloStandIdx != static_cast<int> (s));
-            targetGain[s] = mutedBySolo ? 0.0f : cfg.micGain[s];
-            targetMicY[s] = cfg.micY[s];
-
-            const float depthFactor = juce::jmap (cfg.micY[s], 0.0f, 1.0f, 0.55f, 1.0f);
-            const float mx = cfg.micX[s] * (roomW * 0.42f) * depthFactor;
-            const float my = juce::jmap (cfg.micY[s], 0.0f, 1.0f, 0.35f, roomD - 1.5f);
-            distMeters[s] = std::hypot (mx, my);
-
-            if (targetGain[s] > 0.005f)
-            {
-                avgMx += mx * targetGain[s];
-                avgMy += my * targetGain[s];
-                sumW  += targetGain[s];
-            }
-
-            const float atten = 1.0f / (1.0f + 0.12f * std::max (0.0f, distMeters[s] - 0.5f));
-            targetDirWeight[s] = atten;
-            targetAmbWeight[s] = std::clamp (0.18f + (distMeters[s] / std::max (1.0f, roomD)) * 0.92f, 0.15f, 1.35f);
-
-            const float panScale = (s >= 2) ? (0.78f * farW) : 0.72f;
-            const float pan = std::clamp (cfg.micX[s] * panScale, -0.96f, 0.96f);
-            const float ang = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
-            targetPanL[s] = std::cos (ang) * 1.414f;
-            targetPanR[s] = std::sin (ang) * 1.414f;
-        }
-
-        if (sumW > 0.001f) { avgMx /= sumW; avgMy /= sumW; }
-        else               { avgMx = 0.0f;  avgMy = roomD * 0.25f; }
-
-        const float proxDb = juce::jmap (std::clamp (distMeters[0], 0.35f, 1.8f), 0.35f, 1.8f, proxMaxDb, 0.0f);
-        if (std::abs (proxDb - lastProxDb) > 0.05f)
-        {
-            mainProxShelf.setLowShelf (135.0f, proxDb);
-            lastProxDb = proxDb;
-        }
-
-        // Image-Source Method con altura vertical real (z_s + z_mic para piso, 2H - z_s - z_mic para techo)
-        const float fs = static_cast<float> (sr);
-        const float dLeftWall  = std::hypot (roomW + avgMx, avgMy);
-        const float dRightWall = std::hypot (roomW - avgMx, avgMy);
-        const float dFloor     = std::hypot (avgMy, srcHeightZ + micHeightZ);
-        const float dCeil      = std::hypot (avgMy, std::max (1.5f, 2.0f * roomH - srcHeightZ - micHeightZ));
-        const float dBackL     = std::hypot (avgMx + roomW * 0.18f, std::max (2.0f, 2.0f * roomD - avgMy));
-        const float dBackR     = std::hypot (avgMx - roomW * 0.18f, std::max (2.0f, 2.0f * roomD - avgMy));
-
-        const std::array<float, 6> targetErSamples {
-            (dLeftWall  / speed) * fs,
-            (dRightWall / speed) * fs,
-            (dFloor     / speed) * fs,
-            (dCeil      / speed) * fs,
-            (dBackL     / speed) * fs,
-            (dBackR     / speed) * fs
-        };
-
-        const float mainPhysicalDelay = (distMeters[0] / speed) * fs;
-        if (cfg.phaseSafe)
-        {
-            const float anchorDelay = (cfg.modeIdx == 0) ? 0.0f : mainPhysicalDelay;
-            targetDelay[0] = anchorDelay;
-            targetDelay[1] = anchorDelay;
-            targetDelay[2] = anchorDelay;
-            targetDelay[3] = anchorDelay;
-        }
-        else
-        {
-            targetDelay[0] = mainPhysicalDelay;
-            for (size_t s = 1; s < 4; ++s)
-                targetDelay[s] = (distMeters[s] / speed) * fs;
-        }
-
-        const float targetFarOffset = cfg.phaseSafe
-            ? 0.0f
-            : (juce::jmap (farW, 0.2f, 1.5f, 0.0005f, 0.0065f) * fs);
-
-        if (! smoothInitialized)
-        {
-            smDelay = targetDelay;
-            smPanL  = targetPanL;
-            smPanR  = targetPanR;
-            smGain  = targetGain;
-            smMicY  = targetMicY;
-            smDirWeight = targetDirWeight;
-            smAmbWeight = targetAmbWeight;
-            smErSamples = targetErSamples;
-            smDeccaOffset = targetFarOffset;
-            smLowDb = targetLowDb;
-            smMidDb = targetMidDb;
-            smHighDb = targetHighDb;
-            roomLowShelf.setLowShelf (lowFreq, smLowDb);
-            roomMidPeak.setPeak (midFreq, smMidDb, midQ);
-            roomHighShelf.setHighShelf (highFreq, smHighDb);
-            smoothInitialized = true;
-        }
-
-        const float pairW = std::clamp (cfg.pairSpread, 0.0f, 1.5f);
-        const float polaritySign = cfg.phaseInvert ? -1.0f : 1.0f;
-
-        const float airMaxCoeff = (rIdx == 2) ? (wLive ? 0.42f : 0.62f)
-                                              : ((rIdx == 1) ? 0.56f : 0.52f);
-        const float airMinCoeff = (rIdx == 2) ? (wLive ? 0.12f : 0.24f) : 0.16f;
-
-        auto* left  = buffer.getWritePointer (0);
-        auto* right = buffer.getWritePointer (1);
         const int numSamples = buffer.getNumSamples();
-        float dummyGr = 0.0f;
+        const float fs = static_cast<float> (sr);
+
+        // 1. Parámetros físicos de las 3 salas
+        // Studio A (Shangri-La): 12.5m | Studio B (Canyon): 8.5m | Volcano: 20.0m
+        const float roomLenM   = (cfg.roomIdx == 0) ? 12.5f : (cfg.roomIdx == 1 ? 8.5f : 20.0f);
+        const float roomWidthM = roomLenM * 0.78f;
+        const bool isLive      = (cfg.wallsLive == 1);
+
+        // Distancia crítica física (Dc): en Tight es más larga (domina el directo), en Live más corta (domina lo difuso)
+        const float critDistM = roomLenM * (isLive ? 0.24f : 0.42f);
+
+        // Tamaño y decaimiento del FDN de sala
+        const float fdnSize = (cfg.roomIdx == 0) ? 1.00f : (cfg.roomIdx == 1 ? 0.72f : 1.48f);
+        const float baseFb  = (cfg.roomIdx == 0) ? (isLive ? 0.76f : 0.56f)
+                            : (cfg.roomIdx == 1) ? (isLive ? 0.68f : 0.48f)
+                                                 : (isLive ? 0.85f : 0.66f);
+        const float airTail = std::clamp (cfg.roomAirTail, 0.0f, 1.0f);
+        const float fdnFb   = std::clamp (baseFb + airTail * 0.07f, 0.35f, 0.91f);
+
+        // Damping de agudos en la cola (AIR / TAIL abre sedosamente sin volverse chillón)
+        const float dampHz = juce::jmap (airTail, 0.0f, 1.0f,
+                                         isLive ? 4200.0f : 2600.0f,
+                                         isLive ? 9800.0f : 6200.0f);
+        const float dampCoeff = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * dampHz / fs);
+        const float fdnHpCoeff = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 115.0f / fs);
+
+        // Actualizar filtros solo si cambia Air/Tail o PhaseSafe
+        if (std::abs (airTail - lastAirTail) > 0.005f || cfg.phaseSafe != lastPhaseSafe)
+        {
+            const float shelfDb = juce::jmap (airTail, 0.0f, 1.0f, -1.5f, 3.8f);
+            roomAirShelf.setHighShelf (6500.0f, shelfDb);
+            roomHpfProtect.setHighPass (cfg.phaseSafe ? 165.0f : 110.0f, 0.7071f);
+            farHpfProtect.setHighPass  (cfg.phaseSafe ? 190.0f : 120.0f, 0.7071f);
+            lastAirTail = airTail;
+            lastPhaseSafe = cfg.phaseSafe;
+        }
+
+        // 2. Geometría de los 4 atriles (Distancia física, Relación Directo/Difuso, Muros Laterales)
+        constexpr float speedOfSound = 343.0f;
+        std::array<float, 4> distM {}, delaySamps {}, directRatio {}, diffuseRatio {}, airLpCoeff {};
+        std::array<float, 4> wallDelayL {}, wallDelayR {}, wallGainL {}, wallGainR {};
+        std::array<float, 4> panL {}, panR {}, effectiveGain {};
+
+        float totalGainSum = 0.0f;
+
+        for (int m = 0; m < 4; ++m)
+        {
+            const bool isSoloed = (cfg.soloStandIdx >= 0);
+            const float g = (isSoloed && cfg.soloStandIdx != m) ? 0.0f : cfg.micGain[static_cast<size_t> (m)];
+            effectiveGain[static_cast<size_t> (m)] = g;
+            totalGainSum += g;
+
+            const float mx = std::clamp (cfg.micX[static_cast<size_t> (m)], -1.0f, 1.0f);
+            const float my = std::clamp (cfg.micY[static_cast<size_t> (m)],  0.0f, 1.0f);
+
+            const float posXM = mx * (roomWidthM * 0.48f);
+            const float posYM = 0.35f + my * (roomLenM * 0.85f);
+            const float dM = std::sqrt (posXM * posXM + posYM * posYM);
+
+            distM[static_cast<size_t> (m)] = dM;
+            delaySamps[static_cast<size_t> (m)] = (dM / speedOfSound) * fs;
+
+            // Ley de Distancia Crítica: Directo cae como 1/(1 + d/Dc), Difuso crece con d
+            const float dir = 1.0f / (1.0f + (dM / critDistM) * (m == 0 ? 0.55f : 1.05f));
+            directRatio[static_cast<size_t> (m)]  = dir;
+            diffuseRatio[static_cast<size_t> (m)] = std::clamp (1.0f - dir * 0.72f, 0.15f, 1.0f);
+
+            // Absorción natural del aire por metros (suaviza agudos a mayor distancia)
+            const float airCutHz = std::clamp (18500.0f / (1.0f + dM * 0.18f), 2800.0f, 18500.0f);
+            airLpCoeff[static_cast<size_t> (m)] = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * airCutHz / fs);
+
+            // Interacción con muros laterales (X): distancia al muro izquierdo y derecho
+            const float distWallL = std::max (0.4f, (roomWidthM * 0.5f) + posXM);
+            const float distWallR = std::max (0.4f, (roomWidthM * 0.5f) - posXM);
+            const float wallBaseGain = isLive ? 0.32f : 0.14f;
+
+            wallDelayL[static_cast<size_t> (m)] = ((dM + distWallL * 1.35f) / speedOfSound) * fs;
+            wallDelayR[static_cast<size_t> (m)] = ((dM + distWallR * 1.35f) / speedOfSound) * fs;
+            wallGainL[static_cast<size_t> (m)]  = wallBaseGain / (1.0f + distWallL * 0.35f);
+            wallGainR[static_cast<size_t> (m)]  = wallBaseGain / (1.0f + distWallR * 0.35f);
+
+            // Panorama natural según X (sutil en MAIN, completo en FAR L/R)
+            const float panScale = (m == 0) ? 0.45f : (m == 1 ? 0.65f : 0.92f);
+            const float p = std::clamp (mx * panScale, -1.0f, 1.0f);
+            const float angle = (p + 1.0f) * 0.25f * juce::MathConstants<float>::pi;
+            panL[static_cast<size_t> (m)] = std::cos (angle);
+            panR[static_cast<size_t> (m)] = std::sin (angle);
+        }
+
+        // Compensación suave de Headroom al sumar múltiples atriles (evita saturar fácil)
+        const float sumNorm = (totalGainSum > 1.15f) ? (1.0f / std::sqrt (totalGainSum * 0.85f)) : 1.0f;
+
+        // LFO lento para micro-modulación orgánica en FAR L/R cuando PHASE SAFE = OFF
+        const float lfoIncL = juce::MathConstants<float>::twoPi * 0.37f / fs;
+        const float lfoIncR = juce::MathConstants<float>::twoPi * 0.43f / fs;
+        const float modDepthSamps = 0.00024f * fs; // +/- 0.24 ms (chorus/doubler orgánico)
+
+        // Carácter por fuente: en Drums/Bass el ambiente es un poco más cálido
+        const float roomTailGain = (cfg.modeIdx == 0 ? 0.42f : 0.34f) * (isLive ? 1.12f : 0.68f);
+        const float polarity = cfg.phaseInvert ? -1.0f : 1.0f;
+
+        auto* ptrL = buffer.getWritePointer (0);
+        auto* ptrR = buffer.getWritePointer (1);
+        float maxRoomCrushGr = 0.0f;
 
         for (int i = 0; i < numSamples; ++i)
         {
-            for (size_t s = 0; s < 4; ++s)
-            {
-                smDelay[s]     += smoothCoeff * (targetDelay[s]     - smDelay[s]);
-                smPanL[s]      += smoothCoeff * (targetPanL[s]      - smPanL[s]);
-                smPanR[s]      += smoothCoeff * (targetPanR[s]      - smPanR[s]);
-                smGain[s]      += smoothCoeff * (targetGain[s]      - smGain[s]);
-                smMicY[s]      += smoothCoeff * (targetMicY[s]      - smMicY[s]);
-                smDirWeight[s] += smoothCoeff * (targetDirWeight[s] - smDirWeight[s]);
-                smAmbWeight[s] += smoothCoeff * (targetAmbWeight[s] - smAmbWeight[s]);
-            }
-            for (size_t e = 0; e < 6; ++e)
-                smErSamples[e] += smoothCoeff * (targetErSamples[e] - smErSamples[e]);
+            const float inL = ptrL[i];
+            const float inR = ptrR[i];
+            const float inMono = 0.5f * (inL + inR);
 
-            smDeccaOffset += smoothCoeff * (targetFarOffset - smDeccaOffset);
+            srcDelayL.push (inL);
+            srcDelayR.push (inR);
+            erDelayL.push (inL);
+            erDelayR.push (inR);
 
-            const float nextLow  = smLowDb  + smoothCoeff * (targetLowDb  - smLowDb);
-            const float nextMid  = smMidDb  + smoothCoeff * (targetMidDb  - smMidDb);
-            const float nextHigh = smHighDb + smoothCoeff * (targetHighDb - smHighDb);
-            if (std::abs (nextLow - smLowDb) > 0.002f || std::abs (nextMid - smMidDb) > 0.002f || std::abs (nextHigh - smHighDb) > 0.002f)
+            //------------------------------------------------------------------
+            // 1: MAIN (Ancla directa + X-Y estéreo opcional + rebote lateral X)
+            //------------------------------------------------------------------
+            float mainOutL = 0.0f, mainOutR = 0.0f;
+            if (effectiveGain[0] > 0.0005f)
             {
-                smLowDb = nextLow;
-                smMidDb = nextMid;
-                smHighDb = nextHigh;
-                roomLowShelf.setLowShelf (lowFreq, smLowDb);
-                roomMidPeak.setPeak (midFreq, smMidDb, midQ);
-                roomHighShelf.setHighShelf (highFreq, smHighDb);
-            }
+                const float d0 = delaySamps[0];
+                float mL = cfg.mainStereo ? srcDelayL.read (d0) : 0.5f * (srcDelayL.read (d0) + srcDelayR.read (d0));
+                float mR = cfg.mainStereo ? srcDelayR.read (d0) : mL;
 
-            const float dryL = left[i];
-            const float dryR = right[i];
+                // Absorción de aire leve según distancia de MAIN
+                airLpState[0] += airLpCoeff[0] * (mL - airLpState[0]);
+                airLpState[1] += airLpCoeff[0] * (mR - airLpState[1]);
+                mL = mL * 0.65f + airLpState[0] * 0.35f;
+                mR = mR * 0.65f + airLpState[1] * 0.35f;
 
-            float srcL = dryL, srcR = dryR;
-            if (cfg.sourceIdx == 0 || cfg.sourceIdx == 4 || cfg.sourceIdx == 6)
-            {
-                srcL = srcR = 0.5f * (dryL + dryR);
-            }
-            else if (cfg.sourceIdx == 2) // Ensemble: micro-difusión espacial en semicírculo
-            {
-                srcL = 0.72f * dryL + 0.28f * ensSpreadL.processSample (dryR);
-                srcR = 0.72f * dryR + 0.28f * ensSpreadR.processSample (dryL);
-            }
-            else if (cfg.sourceIdx == 3)
-            {
-                srcL = dryL * 0.82f + dryR * 0.18f;
-                srcR = dryR * 0.82f + dryL * 0.18f;
+                // Reflexión temprana de muros laterales según X de MAIN
+                const float erML = erDelayL.read (wallDelayL[0]) * wallGainL[0];
+                const float erMR = erDelayR.read (wallDelayR[0]) * wallGainR[0];
+
+                const float dir0 = directRatio[0];
+                mainOutL = (mL * dir0 * panL[0] * 1.414f + erML * 0.55f) * effectiveGain[0];
+                mainOutR = (mR * dir0 * panR[0] * 1.414f + erMR * 0.55f) * effectiveGain[0];
             }
 
-            erBufL[erWritePos] = srcL;
-            erBufR[erWritePos] = srcR;
-
-            float erL = (readFrac (erBufL, smErSamples[0]) * 0.44f * sideErGain
-                       + readFrac (erBufR, smErSamples[1]) * 0.34f * sideErGain
-                       + readFrac (erBufL, smErSamples[2]) * 0.28f * floorErGain
-                       + readFrac (erBufR, smErSamples[3]) * 0.24f
-                       + readFrac (erBufL, smErSamples[4]) * 0.22f
-                       + readFrac (erBufR, smErSamples[5]) * 0.16f) * wallRef;
-
-            float erR = (readFrac (erBufR, smErSamples[1]) * 0.44f * sideErGain
-                       + readFrac (erBufL, smErSamples[0]) * 0.34f * sideErGain
-                       + readFrac (erBufR, smErSamples[2]) * 0.28f * floorErGain
-                       + readFrac (erBufL, smErSamples[3]) * 0.24f
-                       + readFrac (erBufR, smErSamples[5]) * 0.22f
-                       + readFrac (erBufL, smErSamples[4]) * 0.16f) * wallRef;
-
-            erDampLpL = erL * (1.0f - erDampCoeff) + erDampLpL * erDampCoeff;
-            erDampLpR = erR * (1.0f - erDampCoeff) + erDampLpR * erDampCoeff;
-            erL = erDampLpL;
-            erR = erDampLpR;
-
-            float fdnInL = srcL + erL * 0.38f;
-            float fdnInR = srcR + erR * 0.38f;
-            roomDiffuser.processStereo (fdnInL, fdnInR, roomDiffAmt);
-
-            float fdnL = 0.0f, fdnR = 0.0f;
-            roomFdn.processStereo (fdnInL, fdnInR, fdnL, fdnR);
-
-            float mainL = 0.0f, mainR = 0.0f;
-            float ambL  = 0.0f, ambR  = 0.0f;
-
-            // ATRIL 1: MAIN
-            if (smGain[0] > 0.0005f)
+            //------------------------------------------------------------------
+            // 2: ROOM PAIR (Par estéreo medio + All-Pass en Phase Safe)
+            //------------------------------------------------------------------
+            float roomPairL = 0.0f, roomPairR = 0.0f;
+            if (effectiveGain[1] > 0.0005f)
             {
-                const float g = smGain[0] * smDirWeight[0];
-                const float yDist = smMicY[0];
-                const float dirW = juce::jmap (yDist, 0.0f, 1.0f, 0.98f, 0.30f);
-                const float ambW = juce::jmap (yDist, 0.0f, 1.0f, 0.06f, 0.72f) * smAmbWeight[0];
+                const float spreadSamps = cfg.pairSpread * 0.00085f * fs;
+                float rL = srcDelayL.read (delaySamps[1] + spreadSamps * 0.35f);
+                float rR = srcDelayR.read (delaySamps[1] + spreadSamps * 0.85f);
 
-                float dirL = mainProxShelf.processSample (0, readFrac (erBufL, smDelay[0]));
-                float dirR = mainProxShelf.processSample (1, readFrac (erBufR, smDelay[0]));
+                // Absorción de aire + suavizado de transitorios
+                airLpState[2] += airLpCoeff[1] * (rL - airLpState[2]);
+                airLpState[3] += airLpCoeff[1] * (rR - airLpState[3]);
+                rL = airLpState[2];
+                rR = airLpState[3];
 
-                const float mainAirCoeff = juce::jmap (yDist, 0.0f, 1.0f, 0.0f, 0.34f);
-                mainAirLpL = dirL * (1.0f - mainAirCoeff) + mainAirLpL * mainAirCoeff;
-                mainAirLpR = dirR * (1.0f - mainAirCoeff) + mainAirLpR * mainAirCoeff;
-                dirL = mainAirLpL;
-                dirR = mainAirLpR;
-
-                float sL = dirL * dirW + (erL * 0.72f + fdnL * 0.52f) * ambW;
-                float sR = dirR * dirW + (erR * 0.72f + fdnR * 0.52f) * ambW;
-
-                sL = mainMicVoice.processSample (0, sL);
-                sR = mainMicVoice.processSample (1, sR);
-
-                if (! cfg.mainStereo)
-                    sL = sR = 0.5f * (sL + sR);
-
-                mainL += sL * smPanL[0] * g;
-                mainR += sR * smPanR[0] * g;
-            }
-
-            // ATRIL 2: ROOM PAIR
-            if (smGain[1] > 0.0005f)
-            {
-                const float g = smGain[1] * 0.80f * smDirWeight[1];
-                const float yDist = smMicY[1];
-                const float ambW = smAmbWeight[1];
-                float mL = readFrac (erBufL, smDelay[1]) * (1.0f - yDist * 0.55f) * 0.35f + (erL * 0.75f + fdnL * 0.95f) * ambW;
-                float mR = readFrac (erBufR, smDelay[1]) * (1.0f - yDist * 0.55f) * 0.35f + (erR * 0.75f + fdnR * 0.95f) * ambW;
-
-                const float pairAirCoeff = juce::jmap (yDist, 0.0f, 1.0f, airMinCoeff * 0.85f, airMaxCoeff * 0.9f);
-                airLpL = mL * (1.0f - pairAirCoeff) + airLpL * pairAirCoeff;
-                airLpR = mR * (1.0f - pairAirCoeff) + airLpR * pairAirCoeff;
-                mL = airLpL;
-                mR = airLpR;
+                // Protección de graves para no adelgazar la voz al sumar con MAIN
+                rL = roomHpfProtect.processSample (0, rL);
+                rR = roomHpfProtect.processSample (1, rR);
 
                 if (cfg.phaseSafe)
                 {
-                    mL = pairDecorL.processSample (midPhaseHpf.processSample (0, mL));
-                    mR = pairDecorR.processSample (midPhaseHpf.processSample (1, mR));
+                    rL = apRoomL[1].process (apRoomL[0].process (rL));
+                    rR = apRoomR[1].process (apRoomR[0].process (rR));
                 }
 
-                const float mid  = 0.5f * (mL + mR);
-                const float side = 0.5f * (mL - mR) * pairW;
-                ambL += (mid + side) * smPanL[1] * g;
-                ambR += (mid - side) * smPanR[1] * g;
+                // Muros laterales según X del par
+                const float erRL = erDelayL.read (wallDelayL[1]) * wallGainL[1];
+                const float erRR = erDelayR.read (wallDelayR[1]) * wallGainR[1];
+
+                // Ancho M/S controlado por pairSpread
+                const float mid  = 0.5f * (rL + rR);
+                const float side = 0.5f * (rL - rR) * std::clamp (cfg.pairSpread, 0.0f, 1.5f);
+
+                roomPairL = ((mid + side) * directRatio[1] * panL[1] * 1.25f + erRL) * effectiveGain[1];
+                roomPairR = ((mid - side) * directRatio[1] * panR[1] * 1.25f + erRR) * effectiveGain[1];
             }
 
-            // ATRIL 3: FAR L — Cápsula MONO real
-            if (smGain[2] > 0.0005f)
+            //------------------------------------------------------------------
+            // 3: FAR L y 4: FAR R (Profundidad 3D, Muros Laterales y Doubler)
+            //------------------------------------------------------------------
+            float farOutL = 0.0f, farOutR = 0.0f;
+
+            lfoPhaseL += lfoIncL;
+            if (lfoPhaseL > juce::MathConstants<float>::twoPi) lfoPhaseL -= juce::MathConstants<float>::twoPi;
+            lfoPhaseR += lfoIncR;
+            if (lfoPhaseR > juce::MathConstants<float>::twoPi) lfoPhaseR -= juce::MathConstants<float>::twoPi;
+
+            if (effectiveGain[2] > 0.0005f)
             {
-                const float g = smGain[2] * 0.78f * smDirWeight[2];
-                const float ambW = smAmbWeight[2];
-                const float dFarL = smDelay[2] + smDeccaOffset * 0.35f;
-                const float dirMonoL = 0.65f * readFrac (erBufL, dFarL) + 0.35f * readFrac (erBufR, dFarL);
-                float capsuleL = dirMonoL * 0.22f + (erL * 0.76f + fdnL * 0.96f) * ambW;
+                const float modL = cfg.phaseSafe ? 0.0f : (std::sin (lfoPhaseL) * modDepthSamps);
+                float fL = srcDelayL.read (delaySamps[2] + modL);
+
+                airLpState[4] += airLpCoeff[2] * (fL - airLpState[4]);
+                fL = farHpfProtect.processSample (0, airLpState[4]);
 
                 if (cfg.phaseSafe)
-                    capsuleL = farLDecor.processSample (airPhaseHpf.processSample (0, capsuleL));
+                    fL = apFarL[1].process (apFarL[0].process (fL));
 
-                ambL += capsuleL * smPanL[2] * g;
-                ambR += capsuleL * smPanR[2] * g;
+                const float erFL = erDelayL.read (wallDelayL[2]) * wallGainL[2];
+                const float erFR = erDelayR.read (wallDelayR[2]) * wallGainR[2];
+
+                const float sig = (fL * directRatio[2] + (erFL + erFR) * 0.65f) * effectiveGain[2];
+                farOutL += sig * panL[2] * 1.35f;
+                farOutR += sig * panR[2] * 1.35f;
             }
 
-            // ATRIL 4: FAR R — Cápsula MONO real
-            if (smGain[3] > 0.0005f)
+            if (effectiveGain[3] > 0.0005f)
             {
-                const float g = smGain[3] * 0.78f * smDirWeight[3];
-                const float ambW = smAmbWeight[3];
-                const float dFarR = smDelay[3] + smDeccaOffset * 0.65f;
-                const float dirMonoR = 0.35f * readFrac (erBufL, dFarR) + 0.65f * readFrac (erBufR, dFarR);
-                float capsuleR = dirMonoR * 0.22f + (erR * 0.76f + fdnR * 0.96f) * ambW;
+                const float modR = cfg.phaseSafe ? 0.0f : (std::sin (lfoPhaseR) * modDepthSamps);
+                float fR = srcDelayR.read (delaySamps[3] + modR);
+
+                airLpState[5] += airLpCoeff[3] * (fR - airLpState[5]);
+                fR = farHpfProtect.processSample (1, airLpState[5]);
 
                 if (cfg.phaseSafe)
-                    capsuleR = farRDecor.processSample (deccaPhaseHpf.processSample (1, capsuleR));
+                    fR = apFarR[1].process (apFarR[0].process (fR));
 
-                ambL += capsuleR * smPanL[3] * g;
-                ambR += capsuleR * smPanR[3] * g;
+                const float erFL = erDelayL.read (wallDelayL[3]) * wallGainL[3];
+                const float erFR = erDelayR.read (wallDelayR[3]) * wallGainR[3];
+
+                const float sig = (fR * directRatio[3] + (erFL + erFR) * 0.65f) * effectiveGain[3];
+                farOutL += sig * panL[3] * 1.35f;
+                farOutR += sig * panR[3] * 1.35f;
             }
 
-            // Voicing automático de micrófonos de sala (Cinta en Drums, SDC en Ensemble, etc.) + EQ de sala
-            ambL = ambMicVoice.processSample (0, ambL);
-            ambR = ambMicVoice.processSample (1, ambR);
+            //------------------------------------------------------------------
+            // Campo Difuso de la Sala (FDN 8x8 alimentado según distancia crítica)
+            //------------------------------------------------------------------
+            const float fdnFeedScale = (effectiveGain[0] * diffuseRatio[0] * 0.28f
+                                      + effectiveGain[1] * diffuseRatio[1] * 0.55f
+                                      + effectiveGain[2] * diffuseRatio[2] * 0.65f
+                                      + effectiveGain[3] * diffuseRatio[3] * 0.65f);
 
-            ambL = roomHighShelf.processSample (0, roomMidPeak.processSample (0, roomLowShelf.processSample (0,
-                   roomBoomDip.processSample (0, roomSubHpf.processSample (0, ambL)))));
-            ambR = roomHighShelf.processSample (1, roomMidPeak.processSample (1, roomLowShelf.processSample (1,
-                   roomBoomDip.processSample (1, roomSubHpf.processSample (1, ambR)))));
+            float tailL = 0.0f, tailR = 0.0f;
+            roomFdn.processStereo (inL * fdnFeedScale, inR * fdnFeedScale, tailL, tailR,
+                                   fdnSize, fdnFb, dampCoeff, fdnHpCoeff);
 
-            if (cfg.deMudOn)
-            {
-                ambL = deMudDip.processSample (0, deMudHpf.processSample (0, ambL));
-                ambR = deMudDip.processSample (1, deMudHpf.processSample (1, ambR));
-            }
+            // Brillo sedoso AIR / TAIL aplicado a las reflexiones + cola difusa
+            float ambL = roomPairL + farOutL + tailL * roomTailGain;
+            float ambR = roomPairR + farOutR + tailR * roomTailGain;
 
+            ambL = roomAirShelf.processSample (0, ambL);
+            ambR = roomAirShelf.processSample (1, ambR);
+
+            // Parallel Crush dedicado a Room Mics si está activo
             if (cfg.roomParallelCrush && cfg.roomParallelAmt > 0.001f)
-                roomAmbComp.processStereoSample (ambL, ambR, cfg.roomParallelAmt, dummyGr);
-
-            const float mixL = mainL + ambL;
-            const float mixR = mainR + ambR;
-
-            if (cfg.modeIdx == 0)
             {
-                left[i]  = (dryL + mixL * 0.55f * polaritySign) * 0.92f;
-                right[i] = (dryR + mixR * 0.55f * polaritySign) * 0.92f;
-            }
-            else
-            {
-                left[i]  = mixL * polaritySign;
-                right[i] = mixR * polaritySign;
+                float cL = ambL, cR = ambR;
+                roomCrushComp.processStereoSample (cL, cR, 1.0f, maxRoomCrushGr);
+                ambL = ambL + (cL - ambL) * cfg.roomParallelAmt;
+                ambR = ambR + (cR - ambR) * cfg.roomParallelAmt;
             }
 
-            erWritePos = (erWritePos + 1) & erMask;
+            // Suma final calibrada (Modo Reverb mezcla Dry + Sala; Modo Re-Mic es 100% microfoneo)
+            float outL = (mainOutL + ambL) * sumNorm * polarity;
+            float outR = (mainOutR + ambR) * sumNorm * polarity;
+
+            if (cfg.modeIdx == 0) // Reverb Mode
+            {
+                outL = inL * 0.72f + outL * 0.58f;
+                outR = inR * 0.72f + outR * 0.58f;
+            }
+
+            ptrL[i] = outL;
+            ptrR[i] = outR;
         }
     }
 
-    void processChamber (juce::AudioBuffer<float>& mainBuffer,
-                         juce::AudioBuffer<float>& scratchBuffer,
-                         bool enabled, int chamberIdx, float sendMix,
-                         float decayNorm, float preDelayMs, float stereoWidth,
-                         bool deMudOn, bool chamberParallelCrush, float parallelAmt)
+    //==========================================================================
+    // ECHO CHAMBERS SUBTERRÁNEAS + CUSTOM WAV IR
+    //==========================================================================
+    void processChamber (juce::AudioBuffer<float>& buffer,
+                         juce::AudioBuffer<float>& scratch,
+                         bool enabled, int chamberType, float mix,
+                         float decay, float preDelayMs, float width,
+                         bool /*unused*/, bool parallelCrush, float parallelAmt)
     {
-        if (! enabled || sendMix <= 0.001f || mainBuffer.getNumChannels() < 2) return;
+        if (! enabled || mix <= 0.001f || buffer.getNumChannels() < 2)
+            return;
 
-        const int numSamples = mainBuffer.getNumSamples();
-        if (scratchBuffer.getNumChannels() < 2 || scratchBuffer.getNumSamples() < numSamples)
-            scratchBuffer.setSize (2, numSamples, false, false, true);
+        const int numSamples = buffer.getNumSamples();
+        const float fs = static_cast<float> (sr);
 
-        scratchBuffer.copyFrom (0, 0, mainBuffer, 0, 0, numSamples);
-        scratchBuffer.copyFrom (1, 0, mainBuffer, 1, 0, numSamples);
+        if (scratch.getNumSamples() < numSamples)
+            scratch.setSize (2, numSamples, false, false, true);
 
-        const float delaySamples = std::clamp (preDelayMs * 0.001f * static_cast<float> (sr), 0.0f, 47999.0f);
-        preDelay.setDelay (delaySamples);
-
-        for (int ch = 0; ch < 2; ++ch)
+        // 1. Custom WAV IR
+        if (chamberType == 4 && hasCustomIr.load())
         {
-            auto* data = scratchBuffer.getWritePointer (ch);
+            scratch.copyFrom (0, 0, buffer, 0, 0, numSamples);
+            scratch.copyFrom (1, 0, buffer, 1, 0, numSamples);
+
+            juce::dsp::AudioBlock<float> irBlock (scratch.getArrayOfWritePointers(), 2, static_cast<size_t> (numSamples));
+            juce::dsp::ProcessContextReplacing<float> ctx (irBlock);
+            customConvolution.process (ctx);
+
+            auto* dstL = buffer.getWritePointer (0);
+            auto* dstR = buffer.getWritePointer (1);
+            auto* wetL = scratch.getWritePointer (0);
+            auto* wetR = scratch.getWritePointer (1);
+
             for (int i = 0; i < numSamples; ++i)
             {
-                preDelay.pushSample (ch, data[i]);
-                data[i] = preDelay.popSample (ch);
+                const float mid  = 0.5f * (wetL[i] + wetR[i]);
+                const float side = 0.5f * (wetL[i] - wetR[i]) * width;
+                dstL[i] += (mid + side) * mix;
+                dstR[i] += (mid - side) * mix;
             }
+            return;
         }
 
-        if (chamberIdx == 4 && customIRLoaded.load())
+        // 2. Echo Chambers Algorítmicas (1: Bright, 3: Classic, 5: Deep, 8: Dense)
+        if (chamberType != lastChamberType)
         {
-            juce::dsp::AudioBlock<float> block (scratchBuffer);
-            juce::dsp::ProcessContextReplacing<float> ctx (block);
-            customConvolver.process (ctx);
-        }
-        else
-        {
-            const int cIdx = (chamberIdx == 4) ? 1 : std::clamp (chamberIdx, 0, 3);
-
-            if (cIdx != lastChamberIdx)
-            {
-                if (cIdx == 0)
-                {
-                    chamberInHpf.setHighPass (265.0f, 0.72f);
-                    chamberInLpf.setLowPass  (9800.0f, 0.75f);
-                    chamberVoicePeak.setPeak (4200.0f, 2.4f, 0.95f);
-                }
-                else if (cIdx == 1)
-                {
-                    chamberInHpf.setHighPass (145.0f, 0.72f);
-                    chamberInLpf.setLowPass  (8200.0f, 0.78f);
-                    chamberVoicePeak.setPeak (1650.0f, 1.8f, 0.85f);
-                }
-                else if (cIdx == 2)
-                {
-                    chamberInHpf.setHighPass (105.0f, 0.70f);
-                    chamberInLpf.setLowPass  (6200.0f, 0.82f);
-                    chamberVoicePeak.setPeak (680.0f, 1.5f, 0.80f);
-                }
-                else
-                {
-                    chamberInHpf.setHighPass (185.0f, 0.72f);
-                    chamberInLpf.setLowPass  (10600.0f, 0.75f);
-                    chamberVoicePeak.setPeak (2800.0f, 1.6f, 0.90f);
-                }
-                lastChamberIdx = cIdx;
-            }
-
-            static constexpr std::array<std::array<float, 8>, 4> chamberDelays {{
-                { 23.1f, 29.9f, 38.3f, 46.7f, 56.3f, 67.1f, 76.9f, 89.3f },
-                { 31.7f, 39.3f, 48.1f, 58.7f, 68.3f, 79.7f, 92.9f, 107.3f },
-                { 35.9f, 44.3f, 54.7f, 66.1f, 78.7f, 91.9f, 106.3f, 121.7f },
-                { 26.3f, 33.7f, 41.9f, 49.9f, 60.7f, 72.7f, 85.3f, 99.1f }
-            }};
-
-            static constexpr std::array<float, 4> naturalRt60  { 2.8f, 4.1f, 5.2f, 3.8f };
-            static constexpr std::array<float, 4> chamberDamp  { 0.22f, 0.34f, 0.48f, 0.28f };
-            static constexpr std::array<float, 4> chamberLfCut { 240.0f, 150.0f, 110.0f, 180.0f };
-            static constexpr std::array<float, 4> chamberDiff  { 0.56f, 0.60f, 0.58f, 0.65f };
-            static constexpr std::array<float, 4> chamberMod   { 0.45f, 0.55f, 0.50f, 0.72f };
-
-            const size_t idx = static_cast<size_t> (cIdx);
-            chamberFdn.setProfile (chamberDelays[idx], naturalRt60[idx] * decayNorm,
-                                   chamberDamp[idx], chamberMod[idx], chamberLfCut[idx]);
-
-            auto* chL = scratchBuffer.getWritePointer (0);
-            auto* chR = scratchBuffer.getWritePointer (1);
-            for (int i = 0; i < numSamples; ++i)
-            {
-                float inL = chamberVoicePeak.processSample (0, chamberInLpf.processSample (0, chamberInHpf.processSample (0, chL[i])));
-                float inR = chamberVoicePeak.processSample (1, chamberInLpf.processSample (1, chamberInHpf.processSample (1, chR[i])));
-                inL = std::tanh (inL * 1.12f) * 0.90f;
-                inR = std::tanh (inR * 1.12f) * 0.90f;
-
-                chamberDiffuser.processStereo (inL, inR, chamberDiff[idx]);
-
-                float outL = 0.0f, outR = 0.0f;
-                chamberFdn.processStereo (inL, inR, outL, outR);
-                chL[i] = outL;
-                chR[i] = outR;
-            }
+            if (chamberType == 0)      { chamberHpf.setHighPass (260.0f, 0.7f); chamberTone.setHighShelf (4200.0f,  2.8f); }
+            else if (chamberType == 1) { chamberHpf.setHighPass (200.0f, 0.7f); chamberTone.setPeak      (2400.0f,  1.6f, 0.9f); }
+            else if (chamberType == 2) { chamberHpf.setHighPass (150.0f, 0.7f); chamberTone.setHighShelf (3800.0f, -1.8f); }
+            else                       { chamberHpf.setHighPass (180.0f, 0.7f); chamberTone.setHighShelf (5200.0f,  1.2f); }
+            lastChamberType = chamberType;
         }
 
-        if (chamberParallelCrush && parallelAmt > 0.001f)
-            chamberAmbComp.configure (3, -24.0f, true, true, false);
+        const float sizeScale = (chamberType == 0) ? 0.88f : (chamberType == 1 ? 1.02f : (chamberType == 2 ? 1.28f : 1.14f));
+        const float fb        = juce::jmap (std::clamp (decay, 0.15f, 1.0f), 0.15f, 1.0f, 0.58f, 0.935f);
+        const float dampHz    = (chamberType == 0) ? 10500.0f : (chamberType == 1 ? 7600.0f : (chamberType == 2 ? 4800.0f : 6800.0f));
+        const float dampCoeff = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * dampHz / fs);
+        const float hpCoeff   = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 140.0f / fs);
+        const float preSamps  = std::clamp (preDelayMs, 0.0f, 150.0f) * 0.001f * fs;
 
-        auto* sL = scratchBuffer.getWritePointer (0);
-        auto* sR = scratchBuffer.getWritePointer (1);
-        auto* mL = mainBuffer.getWritePointer (0);
-        auto* mR = mainBuffer.getWritePointer (1);
-        float dummyGr = 0.0f;
+        auto* ptrL = buffer.getWritePointer (0);
+        auto* ptrR = buffer.getWritePointer (1);
+        float maxChGr = 0.0f;
 
         for (int i = 0; i < numSamples; ++i)
         {
-            float cL = chamberBoomDip.processSample (0, chamberSubHpf.processSample (0, sL[i]));
-            float cR = chamberBoomDip.processSample (1, chamberSubHpf.processSample (1, sR[i]));
+            const float inL = ptrL[i];
+            const float inR = ptrR[i];
 
-            if (deMudOn)
+            chPreDelayL.push (inL);
+            chPreDelayR.push (inR);
+
+            const float sendL = (preSamps > 1.0f) ? chPreDelayL.read (preSamps) : inL;
+            const float sendR = (preSamps > 1.0f) ? chPreDelayR.read (preSamps) : inR;
+
+            float wL = 0.0f, wR = 0.0f;
+            chamberFdn.processStereo (sendL, sendR, wL, wR, sizeScale, fb, dampCoeff, hpCoeff);
+
+            wL = chamberTone.processSample (0, chamberHpf.processSample (0, wL));
+            wR = chamberTone.processSample (1, chamberHpf.processSample (1, wR));
+
+            if (parallelCrush && parallelAmt > 0.001f)
             {
-                cL = chamberDeMudDip.processSample (0, chamberDeMudHpf.processSample (0, cL));
-                cR = chamberDeMudDip.processSample (1, chamberDeMudHpf.processSample (1, cR));
+                float cL = wL, cR = wR;
+                chamberCrushComp.processStereoSample (cL, cR, 1.0f, maxChGr);
+                wL = wL + (cL - wL) * parallelAmt;
+                wR = wR + (cR - wR) * parallelAmt;
             }
-            if (chamberParallelCrush && parallelAmt > 0.001f)
-                chamberAmbComp.processStereoSample (cL, cR, parallelAmt, dummyGr);
 
-            const float mid  = 0.5f * (cL + cR);
-            const float side = 0.5f * (cL - cR) * stereoWidth;
-            mL[i] += (mid + side) * sendMix;
-            mR[i] += (mid - side) * sendMix;
+            const float mid  = 0.5f * (wL + wR);
+            const float side = 0.5f * (wL - wR) * std::clamp (width, 0.0f, 1.5f);
+
+            ptrL[i] = inL + (mid + side) * mix;
+            ptrR[i] = inR + (mid - side) * mix;
         }
     }
 
 private:
-    inline float readFrac (const std::vector<float>& buf, float delaySamples) const noexcept
-    {
-        const float d = std::clamp (delaySamples, 0.0f, static_cast<float> (erBufSize - 4));
-        const auto dInt = static_cast<size_t> (d);
-        const float frac = d - static_cast<float> (dInt);
-        const size_t idx0 = (erWritePos - dInt) & erMask;
-        const size_t idx1 = (idx0 - 1) & erMask;
-        return buf[idx0] * (1.0f - frac) + buf[idx1] * frac;
-    }
-
     double sr = 44100.0;
-    size_t erBufSize = 16384, erMask = 16383, erWritePos = 0;
-    std::vector<float> erBufL, erBufR;
-    float mainAirLpL = 0.0f, mainAirLpR = 0.0f;
-    float airLpL = 0.0f, airLpR = 0.0f;
-    float erDampLpL = 0.0f, erDampLpR = 0.0f;
 
-    float smLowDb = 0.0f, smMidDb = 0.0f, smHighDb = 0.0f;
-    float lastProxDb = -99.0f;
-    int lastChamberIdx = -1;
-    int lastPhaseSrcIdx = -1;
+    SimpleDelayLine srcDelayL, srcDelayR;
+    SimpleDelayLine erDelayL, erDelayR;
+    SimpleDelayLine chPreDelayL, chPreDelayR;
 
-    float smoothCoeff = 0.001f;
-    bool smoothInitialized = false;
-    std::array<float, 4> smDelay {}, smPanL {}, smPanR {}, smGain {}, smMicY {};
-    std::array<float, 4> smDirWeight {}, smAmbWeight {};
-    std::array<float, 6> smErSamples {};
-    float smDeccaOffset = 0.0f;
+    std::array<ShortAllPass, 2> apRoomL, apRoomR, apFarL, apFarR;
+    HadamardFdn8 roomFdn, chamberFdn;
 
-    FirstOrderAllPass pairDecorL, pairDecorR, farLDecor, farRDecor, ensSpreadL, ensSpreadR;
-    StereoAllPassDiffuser roomDiffuser, chamberDiffuser;
-    StereoBiquad mainMicVoice, ambMicVoice;
-    StereoBiquad midPhaseHpf, airPhaseHpf, deccaPhaseHpf, mainProxShelf;
-    StereoBiquad roomLowShelf, roomMidPeak, roomHighShelf;
-    StereoBiquad roomBoomDip, roomSubHpf, deMudHpf, deMudDip;
-    StereoBiquad chamberInHpf, chamberInLpf, chamberVoicePeak;
-    StereoBiquad chamberBoomDip, chamberSubHpf, chamberDeMudHpf, chamberDeMudDip;
-    HadamardFDN roomFdn, chamberFdn;
-    VintageCompressor roomAmbComp, chamberAmbComp;
+    StereoBiquad roomAirShelf, roomHpfProtect, farHpfProtect;
+    StereoBiquad chamberHpf, chamberTone;
+    VintageCompressor roomCrushComp, chamberCrushComp;
 
-    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> preDelay { 48000 };
-    juce::dsp::Convolution customConvolver;
-    std::atomic<bool> customIRLoaded { false };
-    juce::String loadedIRName { "No IR Loaded" };
+    juce::dsp::Convolution customConvolution;
+    juce::String loadedIrName { "None" };
+    std::atomic<bool> hasCustomIr { false };
+
+    std::array<float, 6> airLpState {};
+    float lfoPhaseL = 0.0f, lfoPhaseR = 1.5707963f;
+    float lastAirTail = -1.0f;
+    bool lastPhaseSafe = true;
+    int lastChamberType = -1;
 };

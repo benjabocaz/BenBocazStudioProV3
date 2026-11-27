@@ -122,7 +122,7 @@ void BenBocazStudioProProcessor::prepareToPlay (double sampleRate, int samplesPe
 {
     currentSampleRate = sampleRate;
 
-    srcHpf.prepare (sampleRate); srcLpf.prepare (sampleRate); srcMid.prepare (sampleRate);
+    monitorVoicing.prepare (sampleRate);
     cabVoicing.prepare (sampleRate);
 
     vocalMicModeler.prepare (sampleRate);
@@ -166,31 +166,18 @@ void BenBocazStudioProProcessor::updateFiltersAndChain (bool force)
     const int monIdx   = static_cast<int> (apvts.getRawParameterValue ("monitorType")->load());
     const float drvAmt = apvts.getRawParameterValue ("consoleDrive")->load();
 
-    if (force || srcIdx != lastSrcIdx || monIdx != lastMonIdx)
-    {
-        if (srcIdx == 3)
-        {
-            if (monIdx == 0)      { srcHpf.setHighPass (48.0f);  srcLpf.setLowPass (16500.0f); srcMid.setPeak (2200.0f, 1.5f, 1.0f); }
-            else if (monIdx == 1) { srcHpf.setHighPass (115.0f); srcLpf.setLowPass (10200.0f); srcMid.setPeak (1750.0f, 4.0f, 1.1f); }
-            else                  { srcHpf.setHighPass (82.0f);  srcLpf.setLowPass (13800.0f); srcMid.setPeak (3100.0f, 3.0f, 1.3f); }
-        }
-        else
-        {
-            srcHpf.setBypass(); srcLpf.setBypass(); srcMid.setBypass();
-        }
-        lastMonIdx = monIdx;
-    }
-
     const float mic1X = apvts.getRawParameterValue ("mic1X")->load();
     const float mic1Y = apvts.getRawParameterValue ("mic1Y")->load();
-    // Ángulo real del micrófono principal frente al cono: 0 = centro (filo), 1 = fuera de eje (cálido)
     const float offAxisAngle = std::atan2 (std::abs (mic1X), 0.25f + mic1Y);
     const float offAxisNorm  = std::clamp (offAxisAngle / (juce::MathConstants<float>::pi * 0.42f), 0.0f, 1.0f);
 
-    if (force || srcIdx != lastSrcIdx || std::abs (drvAmt - lastDrvAmt) > 0.002f || std::abs (offAxisNorm - lastOffAxis) > 0.01f)
+    if (force || srcIdx != lastSrcIdx || monIdx != lastMonIdx
+        || std::abs (drvAmt - lastDrvAmt) > 0.002f || std::abs (offAxisNorm - lastOffAxis) > 0.01f)
     {
+        monitorVoicing.configure (srcIdx == 3, monIdx, drvAmt, offAxisNorm);
         cabVoicing.configure (srcIdx, drvAmt, offAxisNorm);
         lastSrcIdx  = srcIdx;
+        lastMonIdx  = monIdx;
         lastDrvAmt  = drvAmt;
         lastOffAxis = offAxisNorm;
     }
@@ -296,9 +283,7 @@ void BenBocazStudioProProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     if (roomOn)
     {
-        srcHpf.processBuffer (buffer);
-        srcMid.processBuffer (buffer);
-        srcLpf.processBuffer (buffer);
+        monitorVoicing.processBuffer (buffer);
         cabVoicing.processBuffer (buffer);
 
         MultiMicRoomConfig cfg;
@@ -326,9 +311,8 @@ void BenBocazStudioProProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         acousticEngine.processMultiMicRoom (buffer, cfg);
     }
 
-    // El breakup de los amplis (4, 5, 6) ahora ocurre pre-sala dentro de CabinetVoicingStage;
-    // en consola solo queda activo para Monitors (3)
-    const bool hasSpeaker = roomOn && (sourceIdx == 3);
+    // Tanto los amplis (4,5,6) como los monitores (3) ya procesan su física pre-sala
+    const bool hasSpeaker = false;
     const int order = static_cast<int> (apvts.getRawParameterValue ("chainOrder")->load());
     if (order == 2)
     {
@@ -341,7 +325,6 @@ void BenBocazStudioProProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         processChamberStage (buffer);
     }
 
-    // Ganancia de salida suavizada muestra a muestra (cero zipper noise)
     const float targetOutGain = juce::Decibels::decibelsToGain (apvts.getRawParameterValue ("outputGain")->load());
     smoothedOutGain.setTargetValue (targetOutGain);
     smoothedOutGain.applyGain (buffer, buffer.getNumSamples());

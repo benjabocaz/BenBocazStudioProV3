@@ -9,7 +9,7 @@
 #include <atomic>
 
 //==============================================================================
-// Filtro All-Pass de 1er Orden (Decorrelación de fase transparente para Phase Safe)
+// Filtro All-Pass de 1er Orden (Decorrelación de fase transparente)
 //==============================================================================
 class FirstOrderAllPass
 {
@@ -38,7 +38,7 @@ private:
 };
 
 //==============================================================================
-// Difusor All-Pass Estéreo de 4 Etapas (elimina grano metálico en transitorios)
+// Difusor All-Pass Estéreo de 4 Etapas
 //==============================================================================
 class StereoAllPassDiffuser
 {
@@ -231,7 +231,7 @@ struct MultiMicRoomConfig
     bool phaseInvert = false;
     bool mainStereo = false;
     bool deMudOn = false;
-    int soloStandIdx = -1; // -1: Ninguno, 0..3: Solo atril específico
+    int soloStandIdx = -1;
     float pairSpread = 1.0f;
     float deccaWidth = 1.0f;
 
@@ -268,11 +268,17 @@ public:
         roomAmbComp.prepare (sr);
         chamberAmbComp.prepare (sr);
 
-        // Decorreladores All-Pass sutiles (frecuencias escalonadas para compatibilidad mono)
+        // Decorreladores All-Pass sutiles (Phase Safe + difusión de Ensemble)
         pairDecorL.prepare (sr, 520.0f);
         pairDecorR.prepare (sr, 790.0f);
         farLDecor.prepare  (sr, 640.0f);
         farRDecor.prepare  (sr, 970.0f);
+        ensSpreadL.prepare (sr, 380.0f);
+        ensSpreadR.prepare (sr, 1120.0f);
+
+        // Voicing automático de micrófonos según fuente (LDC, Cinta, Dinámico+Cinta, SDC)
+        mainMicVoice.prepare (sr);
+        ambMicVoice.prepare (sr);
 
         midPhaseHpf.prepare (sr);   midPhaseHpf.setHighPass (120.0f, 0.7071f);
         airPhaseHpf.prepare (sr);   airPhaseHpf.setHighPass (160.0f, 0.7071f);
@@ -318,6 +324,8 @@ public:
         erWritePos = 0;
         smoothInitialized = false;
         pairDecorL.reset(); pairDecorR.reset(); farLDecor.reset(); farRDecor.reset();
+        ensSpreadL.reset(); ensSpreadR.reset();
+        mainMicVoice.reset(); ambMicVoice.reset();
         roomDiffuser.reset(); chamberDiffuser.reset();
         roomFdn.reset(); chamberFdn.reset();
         roomAmbComp.reset(); chamberAmbComp.reset();
@@ -352,19 +360,43 @@ public:
     {
         if (buffer.getNumChannels() < 2) return;
 
-        // HPF adaptativo de protección de fase según el instrumento seleccionado
+        // HPF adaptativo de fase + Voicing automático de micrófonos según el ROOM SOURCE
         if (cfg.sourceIdx != lastPhaseSrcIdx)
         {
             float pairCut = 120.0f, farCut = 160.0f;
             switch (std::clamp (cfg.sourceIdx, 0, 6))
             {
-                case 0: pairCut = 155.0f; farCut = 210.0f; break; // Vocals
-                case 1: pairCut = 95.0f;  farCut = 130.0f; break; // Drums
-                case 2: pairCut = 110.0f; farCut = 145.0f; break; // Ensemble
-                case 3: pairCut = 110.0f; farCut = 150.0f; break; // Monitors
+                case 0: // Vocals: MAIN = Condensador LDC cálido/sedoso; Sala = LDC limpio
+                    pairCut = 155.0f; farCut = 210.0f;
+                    mainMicVoice.setHighShelf (10500.0f, 1.4f);
+                    ambMicVoice.setHighShelf  (9500.0f, -0.8f);
+                    break;
+                case 1: // Drums: Sala = Micrófonos de Cinta (tipo Coles 4038 / RCA: doman platillos y engordan)
+                    pairCut = 95.0f; farCut = 130.0f;
+                    mainMicVoice.setPeak      (3200.0f, 0.8f, 0.9f);
+                    ambMicVoice.setHighShelf  (5800.0f, -3.2f);
+                    break;
+                case 2: // Ensemble: Condensadores SDC abiertos y detallados
+                    pairCut = 110.0f; farCut = 145.0f;
+                    mainMicVoice.setHighShelf (12000.0f, 1.2f);
+                    ambMicVoice.setHighShelf  (11000.0f, 1.0f);
+                    break;
+                case 3: // Monitors (Swedien): Referencia neutral
+                    pairCut = 110.0f; farCut = 150.0f;
+                    mainMicVoice.setBypass();
+                    ambMicVoice.setBypass();
+                    break;
                 case 4:
-                case 5: pairCut = 125.0f; farCut = 170.0f; break; // Guitar Mono / Stereo
-                case 6: pairCut = 165.0f; farCut = 220.0f; break; // Bass Amp
+                case 5: // Guitar Cab: MAIN = Dinámico + Cinta (foco en medios); Sala = Cinta suave
+                    pairCut = 125.0f; farCut = 170.0f;
+                    mainMicVoice.setPeak      (2400.0f, 1.2f, 1.1f);
+                    ambMicVoice.setHighShelf  (6500.0f, -2.0f);
+                    break;
+                case 6: // Bass Amp: MAIN = Dinámico de diafragma grande; Sala = Cinta cálida
+                    pairCut = 165.0f; farCut = 220.0f;
+                    mainMicVoice.setLowShelf  (95.0f, 1.2f);
+                    ambMicVoice.setHighShelf  (5500.0f, -2.2f);
+                    break;
             }
             midPhaseHpf.setHighPass (pairCut, 0.7071f);
             airPhaseHpf.setHighPass (farCut, 0.7071f);
@@ -458,6 +490,27 @@ public:
         const float wallRef = (rIdx == 2) ? (wLive ? 0.80f : 0.38f)
                                           : (wLive ? 0.72f : 0.40f);
 
+        // Geometría vertical (z_s) y pesos de reflexión reales según la fuente
+        float srcHeightZ = 1.25f;
+        float sideErGain = 1.0f;
+        float floorErGain = 1.0f;
+        float proxMaxDb = 2.4f;
+
+        switch (std::clamp (cfg.sourceIdx, 0, 6))
+        {
+            case 0: // Vocals: boca alta (~1.65m), proyección frontal, proximidad más sensible
+                srcHeightZ = 1.65f; sideErGain = 0.88f; floorErGain = 0.78f; proxMaxDb = 3.2f; break;
+            case 1: // Drums: bombo/caja bajos (~0.90m), energía 360° que excita fuerte piso y paredes
+                srcHeightZ = 0.90f; sideErGain = 1.22f; floorErGain = 1.28f; proxMaxDb = 1.8f; break;
+            case 2: // Ensemble: fuente ancha en semicírculo, énfasis lateral suave
+                srcHeightZ = 1.30f; sideErGain = 1.18f; floorErGain = 0.95f; proxMaxDb = 1.6f; break;
+            case 3: // Monitors
+                srcHeightZ = 1.40f; sideErGain = 1.00f; floorErGain = 0.95f; proxMaxDb = 2.0f; break;
+            default: // Guitar / Bass Amps: gabinetes cerca del piso (~0.55m)
+                srcHeightZ = 0.55f; sideErGain = 1.05f; floorErGain = 1.18f; proxMaxDb = 2.6f; break;
+        }
+        const float micHeightZ = 1.45f;
+
         const float farW = std::clamp (cfg.deccaWidth, 0.2f, 1.5f);
 
         std::array<float, 4> distMeters {};
@@ -502,18 +555,19 @@ public:
         if (sumW > 0.001f) { avgMx /= sumW; avgMy /= sumW; }
         else               { avgMx = 0.0f;  avgMy = roomD * 0.25f; }
 
-        const float proxDb = juce::jmap (std::clamp (distMeters[0], 0.35f, 1.8f), 0.35f, 1.8f, 2.4f, 0.0f);
+        const float proxDb = juce::jmap (std::clamp (distMeters[0], 0.35f, 1.8f), 0.35f, 1.8f, proxMaxDb, 0.0f);
         if (std::abs (proxDb - lastProxDb) > 0.05f)
         {
             mainProxShelf.setLowShelf (135.0f, proxDb);
             lastProxDb = proxDb;
         }
 
+        // Image-Source Method con altura vertical real (z_s + z_mic para piso, 2H - z_s - z_mic para techo)
         const float fs = static_cast<float> (sr);
         const float dLeftWall  = std::hypot (roomW + avgMx, avgMy);
         const float dRightWall = std::hypot (roomW - avgMx, avgMy);
-        const float dFloor     = std::hypot (avgMy, 2.2f);
-        const float dCeil      = std::hypot (avgMy, roomH * 1.8f);
+        const float dFloor     = std::hypot (avgMy, srcHeightZ + micHeightZ);
+        const float dCeil      = std::hypot (avgMy, std::max (1.5f, 2.0f * roomH - srcHeightZ - micHeightZ));
         const float dBackL     = std::hypot (avgMx + roomW * 0.18f, std::max (2.0f, 2.0f * roomD - avgMy));
         const float dBackR     = std::hypot (avgMx - roomW * 0.18f, std::max (2.0f, 2.0f * roomD - avgMy));
 
@@ -526,11 +580,9 @@ public:
             (dBackR     / speed) * fs
         };
 
-        // True Time-Align cuando PHASE SAFE está ON; retardos físicos completos cuando está OFF (FREE DELAY)
         const float mainPhysicalDelay = (distMeters[0] / speed) * fs;
         if (cfg.phaseSafe)
         {
-            // En modo Reverb (0) alineamos a 0ms contra la señal Dry; en Re-Mic (1) alineamos todos a 1:MAIN
             const float anchorDelay = (cfg.modeIdx == 0) ? 0.0f : mainPhysicalDelay;
             targetDelay[0] = anchorDelay;
             targetDelay[1] = anchorDelay;
@@ -618,6 +670,11 @@ public:
             {
                 srcL = srcR = 0.5f * (dryL + dryR);
             }
+            else if (cfg.sourceIdx == 2) // Ensemble: micro-difusión espacial en semicírculo
+            {
+                srcL = 0.72f * dryL + 0.28f * ensSpreadL.processSample (dryR);
+                srcR = 0.72f * dryR + 0.28f * ensSpreadR.processSample (dryL);
+            }
             else if (cfg.sourceIdx == 3)
             {
                 srcL = dryL * 0.82f + dryR * 0.18f;
@@ -627,16 +684,16 @@ public:
             erBufL[erWritePos] = srcL;
             erBufR[erWritePos] = srcR;
 
-            float erL = (readFrac (erBufL, smErSamples[0]) * 0.44f
-                       + readFrac (erBufR, smErSamples[1]) * 0.34f
-                       + readFrac (erBufL, smErSamples[2]) * 0.28f
+            float erL = (readFrac (erBufL, smErSamples[0]) * 0.44f * sideErGain
+                       + readFrac (erBufR, smErSamples[1]) * 0.34f * sideErGain
+                       + readFrac (erBufL, smErSamples[2]) * 0.28f * floorErGain
                        + readFrac (erBufR, smErSamples[3]) * 0.24f
                        + readFrac (erBufL, smErSamples[4]) * 0.22f
                        + readFrac (erBufR, smErSamples[5]) * 0.16f) * wallRef;
 
-            float erR = (readFrac (erBufR, smErSamples[1]) * 0.44f
-                       + readFrac (erBufL, smErSamples[0]) * 0.34f
-                       + readFrac (erBufR, smErSamples[2]) * 0.28f
+            float erR = (readFrac (erBufR, smErSamples[1]) * 0.44f * sideErGain
+                       + readFrac (erBufL, smErSamples[0]) * 0.34f * sideErGain
+                       + readFrac (erBufR, smErSamples[2]) * 0.28f * floorErGain
                        + readFrac (erBufL, smErSamples[3]) * 0.24f
                        + readFrac (erBufR, smErSamples[5]) * 0.22f
                        + readFrac (erBufL, smErSamples[4]) * 0.16f) * wallRef;
@@ -675,6 +732,9 @@ public:
 
                 float sL = dirL * dirW + (erL * 0.72f + fdnL * 0.52f) * ambW;
                 float sR = dirR * dirW + (erR * 0.72f + fdnR * 0.52f) * ambW;
+
+                sL = mainMicVoice.processSample (0, sL);
+                sR = mainMicVoice.processSample (1, sR);
 
                 if (! cfg.mainStereo)
                     sL = sR = 0.5f * (sL + sR);
@@ -741,6 +801,10 @@ public:
                 ambL += capsuleR * smPanL[3] * g;
                 ambR += capsuleR * smPanR[3] * g;
             }
+
+            // Voicing automático de micrófonos de sala (Cinta en Drums, SDC en Ensemble, etc.) + EQ de sala
+            ambL = ambMicVoice.processSample (0, ambL);
+            ambR = ambMicVoice.processSample (1, ambR);
 
             ambL = roomHighShelf.processSample (0, roomMidPeak.processSample (0, roomLowShelf.processSample (0,
                    roomBoomDip.processSample (0, roomSubHpf.processSample (0, ambL)))));
@@ -814,25 +878,25 @@ public:
 
             if (cIdx != lastChamberIdx)
             {
-                if (cIdx == 0) // Chamber 1 (Bright / Abbey Road Trick)
+                if (cIdx == 0)
                 {
                     chamberInHpf.setHighPass (265.0f, 0.72f);
                     chamberInLpf.setLowPass  (9800.0f, 0.75f);
                     chamberVoicePeak.setPeak (4200.0f, 2.4f, 0.95f);
                 }
-                else if (cIdx == 1) // Chamber 3 (Classic / Capitol Concrete)
+                else if (cIdx == 1)
                 {
                     chamberInHpf.setHighPass (145.0f, 0.72f);
                     chamberInLpf.setLowPass  (8200.0f, 0.78f);
                     chamberVoicePeak.setPeak (1650.0f, 1.8f, 0.85f);
                 }
-                else if (cIdx == 2) // Chamber 5 (Deep / Subterranean Vault)
+                else if (cIdx == 2)
                 {
                     chamberInHpf.setHighPass (105.0f, 0.70f);
                     chamberInLpf.setLowPass  (6200.0f, 0.82f);
                     chamberVoicePeak.setPeak (680.0f, 1.5f, 0.80f);
                 }
-                else // Chamber 8 (Dense / Stone Lush)
+                else
                 {
                     chamberInHpf.setHighPass (185.0f, 0.72f);
                     chamberInLpf.setLowPass  (10600.0f, 0.75f);
@@ -935,8 +999,9 @@ private:
     std::array<float, 6> smErSamples {};
     float smDeccaOffset = 0.0f;
 
-    FirstOrderAllPass pairDecorL, pairDecorR, farLDecor, farRDecor;
+    FirstOrderAllPass pairDecorL, pairDecorR, farLDecor, farRDecor, ensSpreadL, ensSpreadR;
     StereoAllPassDiffuser roomDiffuser, chamberDiffuser;
+    StereoBiquad mainMicVoice, ambMicVoice;
     StereoBiquad midPhaseHpf, airPhaseHpf, deccaPhaseHpf, mainProxShelf;
     StereoBiquad roomLowShelf, roomMidPeak, roomHighShelf;
     StereoBiquad roomBoomDip, roomSubHpf, deMudHpf, deMudDip;

@@ -334,7 +334,6 @@ float Studio4MicStagePad::getStandScale (int idx) const
 
 float Studio4MicStagePad::getStandVisualHeight (int idx, float scale) const
 {
-    // FAR L y FAR R más altos (estilo atriles de ambiente altos)
     static constexpr std::array<float, 4> baseHeights { 116.0f, 146.0f, 152.0f, 152.0f };
     const float baseH = baseHeights[static_cast<size_t> (std::clamp (idx, 0, 3))];
 
@@ -569,7 +568,6 @@ void Studio4MicStagePad::paint (juce::Graphics& g)
     const bool isCanyon  = (roomIdx == 1);
     const bool isVolcano = (roomIdx == 2);
 
-    // En Volcano (Open y Closed) las fuentes descansan sobre la alfombra del fondo sin flotar
     float floorRatio = 0.70f;
     if (isCanyon)
         floorRatio = isCabinetSource ? 0.725f : 0.735f;
@@ -911,12 +909,20 @@ BenBocazStudioProEditor::BenBocazStudioProEditor (BenBocazStudioProProcessor& p)
     addAndMakeVisible (presetLbl);
 
     presetBox.addItemList ({
-        "01. Simple 2-Mic Clean (Default)",
-        "02. Vocal C-800G Warm & Air",
-        "03. Shangri-La Live Drums",
-        "04. Canyon Guitar Stereo",
-        "05. Bass Amp Low Weight",
-        "06. Swedien NS-10 Re-Mic"
+        "01. Studio A - Lead Vocal Pro",
+        "02. Studio A - Drum Room Punch",
+        "03. Studio A - Live Ensemble",
+        "04. Studio B - Intimate Dry Vocal",
+        "05. Studio B - Tight Drum Booth",
+        "06. Studio B - NS-10 Swedien Re-Mic",
+        "07. Studio A - Altec 604 Re-Mic",
+        "08. Volcano - Epic Arena Drums",
+        "09. Volcano - Cinematic Choir / Strings",
+        "10. Guitar Cab Mono - Vintage Crunch",
+        "11. Guitar Cab Stereo - Wide Shoegaze",
+        "12. Bass Amp - Warm Studio Low End",
+        "13. Vocal Tight Doubler (Haas L/R)",
+        "14. Chorus Wide Loose (Organic Room)"
     }, 1);
     presetBox.setSelectedItemIndex (0, juce::dontSendNotification);
     presetBox.onChange = [this] { applyFactoryPreset (presetBox.getSelectedItemIndex()); };
@@ -1049,7 +1055,7 @@ BenBocazStudioProEditor::BenBocazStudioProEditor (BenBocazStudioProProcessor& p)
     mic4GainSlider.onValueChange = [this, syncFarGain] { syncFarGain (3, 2, mic3GainSlider); };
 
     setupKnob (pairWidthSlider,  pairWidthLbl,  "PAIR WIDE");
-    setupKnob (deccaWidthSlider, deccaWidthLbl, "FAR WIDE");
+    setupKnob (deccaWidthSlider, deccaWidthLbl, "AIR / TAIL");
     setupKnob (chMixSlider,      chMixLbl,      "SEND");
     setupKnob (chDecaySlider,    chDecayLbl,    "DECAY");
     setupKnob (chPreSlider,      chPreLbl,      "PRE-DELAY");
@@ -1114,7 +1120,7 @@ BenBocazStudioProEditor::BenBocazStudioProEditor (BenBocazStudioProProcessor& p)
     mic3GainAtt   = std::make_unique<SliderAtt> (v, "mic3Gain", mic3GainSlider);
     mic4GainAtt   = std::make_unique<SliderAtt> (v, "mic4Gain", mic4GainSlider);
     pairWidthAtt  = std::make_unique<SliderAtt> (v, "pairSpread", pairWidthSlider);
-    deccaWidthAtt = std::make_unique<SliderAtt> (v, "deccaWidth", deccaWidthSlider);
+    deccaWidthAtt = std::make_unique<SliderAtt> (v, "roomAirTail", deccaWidthSlider);
     chMixAtt      = std::make_unique<SliderAtt> (v, "chamberMix", chMixSlider);
     chDecayAtt    = std::make_unique<SliderAtt> (v, "chamberDecay", chDecaySlider);
     chPreAtt      = std::make_unique<SliderAtt> (v, "chamberPreDelay", chPreSlider);
@@ -1161,58 +1167,163 @@ void BenBocazStudioProEditor::applyFactoryPreset (int idx)
             param->setValueNotifyingHost (param->convertTo0to1 (plainVal));
     };
 
-    if (idx == 0)
+    auto setMics = [&] (float x1, float y1, float g1, float x2, float y2, float g2,
+                        float x3, float y3, float g3, float x4, float y4, float g4)
     {
-        setParam ("mode", 1); setParam ("source", 0); setParam ("roomOn", 1); setParam ("mainStereo", 0);
-        setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.16f); setParam ("mic1Gain", 1.0f);
-        setParam ("mic2X", -0.32f); setParam ("mic2Y", 0.48f); setParam ("mic2Gain", 0.25f);
-        setParam ("mic3X", -0.52f); setParam ("mic3Y", 0.78f); setParam ("mic3Gain", 0.0f);
-        setParam ("mic4X",  0.52f); setParam ("mic4Y", 0.78f); setParam ("mic4Gain", 0.0f);
-        setParam ("chamberMix", 0.16f); setParam ("eqLow", 0.0f); setParam ("eqMid", 0.0f); setParam ("eqHigh", 0.0f);
-        setParam ("parCompOn", 0);
-    }
-    else if (idx == 1)
+        setParam ("mic1X", x1); setParam ("mic1Y", y1); setParam ("mic1Gain", g1);
+        setParam ("mic2X", x2); setParam ("mic2Y", y2); setParam ("mic2Gain", g2);
+        setParam ("mic3X", x3); setParam ("mic3Y", y3); setParam ("mic3Gain", g3);
+        setParam ("mic4X", x4); setParam ("mic4Y", y4); setParam ("mic4Gain", g4);
+    };
+
+    // Base limpia antes de aplicar el preset
+    audioProcessor.setSoloStand (-1);
+    updateSoloButtonsUI();
+    setParam ("vocalModOn", 0.0f);
+    setParam ("roomOn", 1.0f);
+    setParam ("mode", 1.0f);
+    setParam ("phaseAlign", 1.0f);
+    setParam ("phaseInvert", 0.0f);
+    setParam ("mainStereo", 0.0f);
+    setParam ("pairSpread", 1.0f);
+    setParam ("roomAirTail", 0.35f);
+    setParam ("parCompOn", 0.0f);
+    setParam ("eqOn", 1.0f);
+    setParam ("compOn", 1.0f);
+    setParam ("eqLow", 0.0f); setParam ("eqMid", 0.0f); setParam ("eqHigh", 0.0f); setParam ("eqHpf", 20.0f);
+    setParam ("outputGain", 0.0f);
+
+    switch (idx)
     {
-        setParam ("mode", 1); setParam ("source", 0); setParam ("room", 0); setParam ("walls", 1);
-        setParam ("vocalModOn", 1); setParam ("vocalSrcMic", 2); setParam ("vocalTgtMic", 0);
-        setParam ("mainStereo", 0); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.16f);
-        setParam ("mic1Gain", 1.05f); setParam ("mic2Gain", 0.25f);
-        setParam ("mic3X", -0.52f); setParam ("mic4X", 0.52f); setParam ("mic3Gain", 0.22f); setParam ("mic4Gain", 0.22f);
-        setParam ("eqType", 1); setParam ("eqHighFreq", 2); setParam ("eqHigh", 2.0f);
-        setParam ("compType", 1); setParam ("compMix", 0.85f); setParam ("chamberMix", 0.22f);
-    }
-    else if (idx == 2)
-    {
-        setParam ("mode", 1); setParam ("source", 1); setParam ("room", 0); setParam ("walls", 1);
-        setParam ("mainStereo", 1); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.24f);
-        setParam ("mic1Gain", 0.95f); setParam ("mic2Gain", 0.65f);
-        setParam ("mic3X", -0.62f); setParam ("mic4X", 0.62f); setParam ("mic3Gain", 0.55f); setParam ("mic4Gain", 0.55f);
-        setParam ("pairSpread", 1.15f); setParam ("deccaWidth", 1.20f);
-        setParam ("eqType", 2); setParam ("parCompOn", 1); setParam ("parCompRoute", 1); setParam ("parCompAmt", 0.55f);
-    }
-    else if (idx == 3)
-    {
-        setParam ("mode", 1); setParam ("source", 5); setParam ("room", 1); setParam ("walls", 1);
-        setParam ("mainStereo", 1); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.20f);
-        setParam ("mic1Gain", 1.0f); setParam ("mic2Gain", 0.50f);
-        setParam ("mic3X", -0.55f); setParam ("mic4X", 0.55f); setParam ("mic3Gain", 0.35f); setParam ("mic4Gain", 0.35f);
-        setParam ("eqType", 0); setParam ("eqMidFreq", 2); setParam ("eqMid", 1.8f);
-    }
-    else if (idx == 4)
-    {
-        setParam ("mode", 1); setParam ("source", 6); setParam ("room", 1); setParam ("walls", 0);
-        setParam ("mainStereo", 0); setParam ("mic1X", 0.0f); setParam ("mic1Y", 0.14f);
-        setParam ("mic1Gain", 1.10f); setParam ("mic2Gain", 0.32f);
-        setParam ("mic3X", -0.45f); setParam ("mic4X", 0.45f); setParam ("mic3Gain", 0.0f); setParam ("mic4Gain", 0.0f);
-        setParam ("eqType", 0); setParam ("eqLowFreq", 1); setParam ("eqLow", 2.5f);
-        setParam ("compType", 0); setParam ("compScFilter", 1);
-    }
-    else
-    {
-        setParam ("mode", 1); setParam ("source", 3); setParam ("monitorType", 1); setParam ("room", 0);
-        setParam ("mainStereo", 1); setParam ("mic1Gain", 0.85f); setParam ("mic2Gain", 0.55f);
-        setParam ("mic3X", -0.55f); setParam ("mic4X", 0.55f); setParam ("mic3Gain", 0.35f); setParam ("mic4Gain", 0.35f);
-        setParam ("consoleDrive", 0.32f);
+        case 0: // 01. Studio A - Lead Vocal Pro
+            setParam ("source", 0.0f); setParam ("room", 0.0f); setParam ("walls", 1.0f);
+            setParam ("roomAirTail", 0.42f);
+            setMics (0.0f, 0.16f, 1.0f, -0.30f, 0.48f, 0.28f, -0.58f, 0.76f, 0.14f, 0.58f, 0.76f, 0.14f);
+            setParam ("chamberOn", 1.0f); setParam ("chamberType", 1.0f); setParam ("chamberMix", 0.22f); setParam ("chamberDecay", 0.72f); setParam ("chamberPreDelay", 26.0f);
+            setParam ("eqType", 1.0f); setParam ("eqTubeModel", 1.0f); setParam ("consoleDrive", 0.22f); setParam ("eqHpf", 85.0f); setParam ("eqHigh", 2.2f);
+            setParam ("compType", 1.0f); setParam ("compThresh", -18.0f); setParam ("compMix", 1.0f);
+            break;
+
+        case 1: // 02. Studio A - Drum Room Punch
+            setParam ("source", 1.0f); setParam ("room", 0.0f); setParam ("walls", 1.0f);
+            setParam ("mainStereo", 1.0f); setParam ("roomAirTail", 0.30f);
+            setMics (0.0f, 0.22f, 0.95f, 0.0f, 0.52f, 0.55f, -0.72f, 0.80f, 0.42f, 0.72f, 0.80f, 0.42f);
+            setParam ("chamberOn", 0.0f);
+            setParam ("eqType", 2.0f); setParam ("eqTubeModel", 2.0f); setParam ("consoleDrive", 0.30f); setParam ("eqLow", 2.5f); setParam ("eqMid", 1.5f);
+            setParam ("compType", 0.0f); setParam ("compThresh", -20.0f); setParam ("parCompOn", 1.0f); setParam ("parCompRoute", 1.0f); setParam ("parCompAmt", 0.42f);
+            break;
+
+        case 2: // 03. Studio A - Live Ensemble
+            setParam ("source", 2.0f); setParam ("room", 0.0f); setParam ("walls", 1.0f);
+            setParam ("mainStereo", 1.0f); setParam ("roomAirTail", 0.50f);
+            setMics (0.0f, 0.28f, 0.92f, 0.0f, 0.56f, 0.48f, -0.65f, 0.82f, 0.35f, 0.65f, 0.82f, 0.35f);
+            setParam ("chamberOn", 1.0f); setParam ("chamberType", 3.0f); setParam ("chamberMix", 0.18f); setParam ("chamberDecay", 0.76f);
+            setParam ("eqType", 0.0f); setParam ("eqTubeModel", 0.0f); setParam ("consoleDrive", 0.18f);
+            setParam ("compType", 2.0f); setParam ("compThresh", -14.0f);
+            break;
+
+        case 3: // 04. Studio B - Intimate Dry Vocal
+            setParam ("source", 0.0f); setParam ("room", 1.0f); setParam ("walls", 0.0f);
+            setParam ("roomAirTail", 0.25f);
+            setMics (0.0f, 0.12f, 1.05f, -0.22f, 0.42f, 0.18f, -0.45f, 0.70f, 0.0f, 0.45f, 0.70f, 0.0f);
+            setParam ("chamberOn", 1.0f); setParam ("chamberType", 0.0f); setParam ("chamberMix", 0.14f); setParam ("chamberDecay", 0.52f); setParam ("chamberPreDelay", 18.0f);
+            setParam ("eqType", 0.0f); setParam ("eqTubeModel", 0.0f); setParam ("consoleDrive", 0.16f); setParam ("eqHpf", 95.0f); setParam ("eqHigh", 1.8f);
+            setParam ("compType", 1.0f); setParam ("compThresh", -16.0f);
+            break;
+
+        case 4: // 05. Studio B - Tight Drum Booth
+            setParam ("source", 1.0f); setParam ("room", 1.0f); setParam ("walls", 0.0f);
+            setParam ("mainStereo", 1.0f); setParam ("roomAirTail", 0.22f);
+            setMics (0.0f, 0.18f, 1.0f, 0.0f, 0.44f, 0.45f, -0.52f, 0.72f, 0.25f, 0.52f, 0.72f, 0.25f);
+            setParam ("chamberOn", 0.0f);
+            setParam ("eqType", 2.0f); setParam ("eqTubeModel", 2.0f); setParam ("consoleDrive", 0.32f); setParam ("eqLow", 2.0f);
+            setParam ("compType", 0.0f); setParam ("compThresh", -22.0f); setParam ("parCompOn", 1.0f); setParam ("parCompRoute", 0.0f); setParam ("parCompAmt", 0.35f);
+            break;
+
+        case 5: // 06. Studio B - NS-10 Swedien Re-Mic
+            setParam ("source", 3.0f); setParam ("monitorType", 1.0f); setParam ("room", 1.0f); setParam ("walls", 1.0f);
+            setParam ("roomAirTail", 0.35f);
+            setMics (0.0f, 0.20f, 0.95f, 0.0f, 0.50f, 0.40f, -0.60f, 0.78f, 0.28f, 0.60f, 0.78f, 0.28f);
+            setParam ("chamberOn", 1.0f); setParam ("chamberType", 1.0f); setParam ("chamberMix", 0.16f);
+            setParam ("eqType", 3.0f); setParam ("eqTubeModel", 3.0f); setParam ("consoleDrive", 0.15f);
+            setParam ("compType", 0.0f); setParam ("compThresh", -16.0f);
+            break;
+
+        case 6: // 07. Studio A - Altec 604 Re-Mic
+            setParam ("source", 3.0f); setParam ("monitorType", 0.0f); setParam ("room", 0.0f); setParam ("walls", 1.0f);
+            setParam ("mainStereo", 1.0f); setParam ("roomAirTail", 0.45f);
+            setMics (0.0f, 0.24f, 0.95f, 0.0f, 0.55f, 0.45f, -0.70f, 0.82f, 0.34f, 0.70f, 0.82f, 0.34f);
+            setParam ("chamberOn", 1.0f); setParam ("chamberType", 1.0f); setParam ("chamberMix", 0.20f);
+            setParam ("eqType", 0.0f); setParam ("eqTubeModel", 0.0f); setParam ("consoleDrive", 0.24f);
+            setParam ("compType", 2.0f); setParam ("compThresh", -15.0f);
+            break;
+
+        case 7: // 08. Volcano - Epic Arena Drums
+            setParam ("source", 1.0f); setParam ("room", 2.0f); setParam ("walls", 1.0f);
+            setParam ("mainStereo", 1.0f); setParam ("roomAirTail", 0.58f);
+            setMics (0.0f, 0.20f, 0.90f, 0.0f, 0.56f, 0.58f, -0.82f, 0.88f, 0.62f, 0.82f, 0.88f, 0.62f);
+            setParam ("chamberOn", 1.0f); setParam ("chamberType", 2.0f); setParam ("chamberMix", 0.16f); setParam ("chamberDecay", 0.84f);
+            setParam ("eqType", 2.0f); setParam ("eqTubeModel", 2.0f); setParam ("consoleDrive", 0.28f); setParam ("eqLow", 2.2f);
+            setParam ("compType", 0.0f); setParam ("compThresh", -22.0f); setParam ("parCompOn", 1.0f); setParam ("parCompRoute", 1.0f); setParam ("parCompAmt", 0.50f);
+            break;
+
+        case 8: // 09. Volcano - Cinematic Choir / Strings
+            setParam ("source", 2.0f); setParam ("room", 2.0f); setParam ("walls", 1.0f);
+            setParam ("mainStereo", 1.0f); setParam ("roomAirTail", 0.72f);
+            setMics (0.0f, 0.32f, 0.85f, 0.0f, 0.60f, 0.55f, -0.85f, 0.90f, 0.55f, 0.85f, 0.90f, 0.55f);
+            setParam ("chamberOn", 1.0f); setParam ("chamberType", 2.0f); setParam ("chamberMix", 0.32f); setParam ("chamberDecay", 0.90f); setParam ("chamberPreDelay", 34.0f);
+            setParam ("eqType", 1.0f); setParam ("eqTubeModel", 1.0f); setParam ("consoleDrive", 0.16f); setParam ("eqHigh", 2.0f);
+            setParam ("compType", 2.0f); setParam ("compThresh", -12.0f);
+            break;
+
+        case 9: // 10. Guitar Cab Mono - Vintage Crunch
+            setParam ("source", 4.0f); setParam ("room", 1.0f); setParam ("walls", 1.0f);
+            setParam ("roomAirTail", 0.30f);
+            setMics (0.08f, 0.14f, 1.05f, -0.35f, 0.48f, 0.32f, -0.58f, 0.74f, 0.18f, 0.58f, 0.74f, 0.18f);
+            setParam ("chamberOn", 1.0f); setParam ("chamberType", 1.0f); setParam ("chamberMix", 0.12f); setParam ("chamberDecay", 0.58f);
+            setParam ("eqType", 0.0f); setParam ("eqTubeModel", 0.0f); setParam ("consoleDrive", 0.38f); setParam ("eqMid", 1.8f);
+            setParam ("compType", 0.0f); setParam ("compThresh", -18.0f);
+            break;
+
+        case 10: // 11. Guitar Cab Stereo - Wide Shoegaze
+            setParam ("source", 5.0f); setParam ("room", 0.0f); setParam ("walls", 1.0f);
+            setParam ("mainStereo", 1.0f); setParam ("roomAirTail", 0.62f);
+            setMics (0.0f, 0.22f, 0.95f, 0.0f, 0.54f, 0.45f, -0.78f, 0.84f, 0.42f, 0.78f, 0.84f, 0.42f);
+            setParam ("chamberOn", 1.0f); setParam ("chamberType", 3.0f); setParam ("chamberMix", 0.34f); setParam ("chamberDecay", 0.86f);
+            setParam ("eqType", 1.0f); setParam ("eqTubeModel", 1.0f); setParam ("consoleDrive", 0.28f);
+            setParam ("compType", 1.0f); setParam ("compThresh", -16.0f);
+            break;
+
+        case 11: // 12. Bass Amp - Warm Studio Low End
+            setParam ("source", 6.0f); setParam ("room", 1.0f); setParam ("walls", 0.0f);
+            setParam ("roomAirTail", 0.18f);
+            setMics (0.0f, 0.15f, 1.05f, -0.25f, 0.45f, 0.22f, -0.48f, 0.70f, 0.0f, 0.48f, 0.70f, 0.0f);
+            setParam ("chamberOn", 0.0f);
+            setParam ("eqType", 1.0f); setParam ("eqTubeModel", 1.0f); setParam ("consoleDrive", 0.34f); setParam ("eqLow", 2.8f);
+            setParam ("compType", 1.0f); setParam ("compThresh", -18.0f); setParam ("compScFilter", 1.0f);
+            break;
+
+        case 12: // 13. Vocal Tight Doubler (Haas L/R)
+            setParam ("source", 0.0f); setParam ("room", 1.0f); setParam ("walls", 0.0f);
+            setParam ("phaseAlign", 0.0f);
+            setParam ("roomAirTail", 0.48f);
+            setMics (0.0f, 0.12f, 1.0f, 0.0f, 0.45f, 0.0f, -0.78f, 0.44f, 0.58f, 0.78f, 0.62f, 0.58f);
+            setParam ("chamberOn", 1.0f); setParam ("chamberType", 0.0f); setParam ("chamberMix", 0.12f); setParam ("chamberDecay", 0.45f); setParam ("chamberPreDelay", 16.0f);
+            setParam ("eqType", 3.0f); setParam ("eqTubeModel", 1.0f); setParam ("consoleDrive", 0.16f); setParam ("eqHpf", 95.0f);
+            setParam ("compType", 1.0f); setParam ("compThresh", -18.0f);
+            break;
+
+        case 13: // 14. Chorus Wide Loose (Organic Room)
+            setParam ("source", 0.0f); setParam ("room", 0.0f); setParam ("walls", 1.0f);
+            setParam ("phaseAlign", 0.0f);
+            setParam ("pairSpread", 1.35f); setParam ("roomAirTail", 0.68f);
+            setMics (0.0f, 0.18f, 0.72f, 0.0f, 0.52f, 0.42f, -0.92f, 0.68f, 0.68f, 0.92f, 0.86f, 0.68f);
+            setParam ("chamberOn", 1.0f); setParam ("chamberType", 3.0f); setParam ("chamberMix", 0.24f); setParam ("chamberDecay", 0.72f); setParam ("chamberWidth", 1.35f);
+            setParam ("eqType", 1.0f); setParam ("eqTubeModel", 1.0f); setParam ("consoleDrive", 0.18f); setParam ("eqHpf", 110.0f); setParam ("eqHigh", 2.0f);
+            setParam ("compType", 1.0f); setParam ("compThresh", -16.0f);
+            break;
+
+        default: break;
     }
 }
 
@@ -1295,6 +1406,7 @@ void BenBocazStudioProEditor::setupKnob (juce::Slider& slider, juce::Label& labe
 {
     slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 14);
+    slider.setNumDecimalPlacesToDisplay (2);
     slider.setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffe0d1b8));
     slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     addAndMakeVisible (slider);
@@ -1310,6 +1422,7 @@ void BenBocazStudioProEditor::setupStandKnob (juce::Slider& slider, juce::TextBu
 {
     slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 14);
+    slider.setNumDecimalPlacesToDisplay (2);
     slider.setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffe0d1b8));
     slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     slider.onDragStart = [this, standIdx] { roomPad.setSelectedStand (standIdx); };

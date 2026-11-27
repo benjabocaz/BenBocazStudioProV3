@@ -30,11 +30,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout BenBocazStudioProProcessor::
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("vocalInGain",  "Mic Mod Input (dB)",  -18.0f, 18.0f, 0.0f));
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("vocalOutGain", "Mic Mod Output (dB)", -18.0f, 18.0f, 0.0f));
 
-    // Sala Rústica independiente, 7 Fuentes y Estéreo
+    // Sala Rústica independiente, 7 Fuentes, Estéreo y AIR / TAIL
     p.push_back (std::make_unique<juce::AudioParameterBool> ("roomOn", "Room Stage Power", true));
     p.push_back (std::make_unique<juce::AudioParameterBool> ("mainStereo", "Main Mic Stereo", false));
     p.push_back (std::make_unique<juce::AudioParameterFloat> ("pairSpread", "Room Pair Width", 0.0f, 1.5f, 1.0f));
-    p.push_back (std::make_unique<juce::AudioParameterFloat> ("deccaWidth", "Far Pair Width",  0.2f, 1.5f, 1.0f));
+    p.push_back (std::make_unique<juce::AudioParameterFloat> ("roomAirTail", "Room Air / Tail", 0.0f, 1.0f, 0.35f));
 
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
         "source", "Source", juce::StringArray {
@@ -297,7 +297,7 @@ void BenBocazStudioProProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         cfg.deMudOn           = false;
         cfg.soloStandIdx      = soloStandIndex.load();
         cfg.pairSpread        = apvts.getRawParameterValue ("pairSpread")->load();
-        cfg.deccaWidth        = apvts.getRawParameterValue ("deccaWidth")->load();
+        cfg.roomAirTail       = apvts.getRawParameterValue ("roomAirTail")->load();
         cfg.roomParallelCrush = parOn && (parRoute == 1);
         cfg.roomParallelAmt   = parAmt;
 

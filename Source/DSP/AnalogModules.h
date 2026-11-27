@@ -344,9 +344,9 @@ public:
 
         if (speakerBreakup)
         {
-            const float spkIn = y * (1.30f + d * 0.60f) + coreFlux * 0.35f;
-            const float spkSat = std::tanh (spkIn + 0.05f * d);
-            y = 0.72f * spkSat + 0.28f * y;
+            const float spkIn = y * (1.25f + d * 0.55f) + coreFlux * 0.30f;
+            const float spkSat = std::tanh (spkIn + 0.04f * d);
+            y = 0.75f * spkSat + 0.25f * y;
         }
 
         const float dc = y - dcIn[c] + 0.9994f * dcOut[c];
@@ -364,7 +364,8 @@ private:
 };
 
 //==============================================================================
-// Voicing de Gabinete (Guitar Cab Mono, Guitar Cab Stereo y Bass Amp)
+// Modelado Físico de Gabinetes (Resonancia de Caja, Notches de Cono, Beaming
+// Off-Axis, Excursión Mecánica y Breakup Pre-Sala)
 //==============================================================================
 class CabinetVoicingStage
 {
@@ -372,77 +373,114 @@ public:
     void prepare (double sampleRate)
     {
         sr = sampleRate > 0.0 ? sampleRate : 44100.0;
+        const float fs = static_cast<float> (sr);
+        exAtkCoeff = 1.0f - std::exp (-1.0f / (0.003f * fs));
+        exRelCoeff = 1.0f - std::exp (-1.0f / (0.065f * fs));
+        exLowCoeff = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 160.0f / fs);
+
         for (int ch = 0; ch < 2; ++ch)
         {
             hpf[ch].prepare (sr);
-            lpf[ch].prepare (sr);
-            cabBox[ch].prepare (sr);
+            lpf1[ch].prepare (sr);
+            lpf2[ch].prepare (sr);
+            boxRes[ch].prepare (sr);
+            cabBody[ch].prepare (sr);
+            coneNotch1[ch].prepare (sr);
+            coneNotch2[ch].prepare (sr);
             coneEdge[ch].prepare (sr);
-            harshBit[ch].prepare (sr);
         }
         reset();
     }
 
     void reset()
     {
+        exLowState.fill (0.0f);
+        exEnv.fill (0.0f);
         for (int ch = 0; ch < 2; ++ch)
         {
-            hpf[ch].reset(); lpf[ch].reset();
-            cabBox[ch].reset(); coneEdge[ch].reset(); harshBit[ch].reset();
+            hpf[ch].reset(); lpf1[ch].reset(); lpf2[ch].reset();
+            boxRes[ch].reset(); cabBody[ch].reset();
+            coneNotch1[ch].reset(); coneNotch2[ch].reset(); coneEdge[ch].reset();
         }
     }
 
-    void configure (int sourceIdx, float driveAmount)
+    // offAxisNorm: 0.0 = justo frente al centro del cono (máximo filo), 1.0 = fuera de eje (cálido/redondo)
+    void configure (int sourceIdx, float driveAmount, float offAxisNorm = 0.0f)
     {
         active = false;
         stereoSpreadAmount = 0.0f;
-        const float drv = std::clamp (driveAmount, 0.0f, 1.0f);
+        isBassCab = false;
+        cabDrive = std::clamp (driveAmount, 0.0f, 1.0f);
+        const float offAx = std::clamp (offAxisNorm, 0.0f, 1.0f);
 
         for (int ch = 0; ch < 2; ++ch)
         {
-            hpf[ch].setBypass(); lpf[ch].setBypass();
-            cabBox[ch].setBypass(); coneEdge[ch].setBypass(); harshBit[ch].setBypass();
+            hpf[ch].setBypass(); lpf1[ch].setBypass(); lpf2[ch].setBypass();
+            boxRes[ch].setBypass(); cabBody[ch].setBypass();
+            coneNotch1[ch].setBypass(); coneNotch2[ch].setBypass(); coneEdge[ch].setBypass();
         }
 
-        if (sourceIdx == 4) // GUITAR CAB (MONO)
+        if (sourceIdx == 4) // GUITAR CAB (MONO — 4x12 / 1x12 Celestion style)
         {
             active = true;
+            const float beamCut = juce::jmap (offAx, 0.0f, 1.0f, 5600.0f, 3450.0f);
+            const float edgeDb  = juce::jmap (offAx, 0.0f, 1.0f, 3.6f, 0.6f) + cabDrive * 1.4f;
+
             for (int ch = 0; ch < 2; ++ch)
             {
-                hpf[ch].setHighPass (92.0f, 0.78f);
-                lpf[ch].setLowPass (5800.0f, 0.85f);
-                cabBox[ch].setPeak (520.0f, 2.4f + drv * 1.4f, 1.15f);
-                coneEdge[ch].setPeak (2350.0f, 3.8f + drv * 2.2f, 1.65f);
-                harshBit[ch].setPeak (3850.0f, 1.8f + drv * 2.8f, 2.2f);
+                hpf[ch].setHighPass (86.0f, 0.85f);
+                boxRes[ch].setPeak (118.0f, 3.4f, 2.2f);             // Resonancia física de caja cerrada
+                cabBody[ch].setPeak (480.0f, 2.0f + cabDrive * 1.0f, 1.15f);
+                coneNotch1[ch].setPeak (1150.0f, -4.2f, 3.6f);       // Imperfección de cono de papel
+                coneNotch2[ch].setPeak (3150.0f, -3.5f, 4.2f);       // Cancelación de dust-cap
+                coneEdge[ch].setPeak (2250.0f, edgeDb, 1.75f);       // Mordida sensible al eje
+                lpf1[ch].setLowPass (beamCut, 0.82f);                // Corte abrupto 24 dB/oct
+                lpf2[ch].setLowPass (beamCut * 1.08f, 0.72f);
             }
         }
-        else if (sourceIdx == 5) // GUITAR CAB (STEREO)
+        else if (sourceIdx == 5) // GUITAR CAB (STEREO — L: British V30 / R: American Tweed)
         {
             active = true;
-            stereoSpreadAmount = 0.34f;
+            stereoSpreadAmount = 0.36f;
+            const float beamCutL = juce::jmap (offAx, 0.0f, 1.0f, 6100.0f, 3750.0f);
+            const float beamCutR = juce::jmap (offAx, 0.0f, 1.0f, 5200.0f, 3300.0f);
 
-            hpf[0].setHighPass (84.0f, 0.75f);
-            lpf[0].setLowPass (6700.0f, 0.80f);
-            cabBox[0].setPeak (580.0f, 2.0f + drv * 1.2f, 1.1f);
-            coneEdge[0].setPeak (2650.0f, 4.5f + drv * 2.4f, 1.75f);
-            harshBit[0].setPeak (4150.0f, 2.8f + drv * 3.4f, 2.4f);
+            // Izquierdo: British mordedor
+            hpf[0].setHighPass (82.0f, 0.84f);
+            boxRes[0].setPeak (124.0f, 3.2f, 2.1f);
+            cabBody[0].setPeak (540.0f, 1.8f + cabDrive * 1.0f, 1.1f);
+            coneNotch1[0].setPeak (1280.0f, -4.0f, 3.8f);
+            coneNotch2[0].setPeak (3400.0f, -3.2f, 4.4f);
+            coneEdge[0].setPeak (2550.0f, juce::jmap (offAx, 0.0f, 1.0f, 4.0f, 1.0f) + cabDrive * 1.5f, 1.8f);
+            lpf1[0].setLowPass (beamCutL, 0.80f);
+            lpf2[0].setLowPass (beamCutL * 1.08f, 0.72f);
 
-            hpf[1].setHighPass (96.0f, 0.78f);
-            lpf[1].setLowPass (5950.0f, 0.85f);
-            cabBox[1].setPeak (440.0f, 3.2f + drv * 1.6f, 1.2f);
-            coneEdge[1].setPeak (2150.0f, 3.6f + drv * 2.0f, 1.55f);
-            harshBit[1].setPeak (3550.0f, 2.2f + drv * 3.0f, 2.1f);
+            // Derecho: American cálido y abierto
+            hpf[1].setHighPass (92.0f, 0.80f);
+            boxRes[1].setPeak (108.0f, 3.6f, 1.9f);
+            cabBody[1].setPeak (410.0f, 2.6f + cabDrive * 1.2f, 1.2f);
+            coneNotch1[1].setPeak (980.0f,  -3.6f, 3.4f);
+            coneNotch2[1].setPeak (2850.0f, -3.8f, 4.0f);
+            coneEdge[1].setPeak (1950.0f, juce::jmap (offAx, 0.0f, 1.0f, 3.0f, 0.6f) + cabDrive * 1.3f, 1.55f);
+            lpf1[1].setLowPass (beamCutR, 0.85f);
+            lpf2[1].setLowPass (beamCutR * 1.10f, 0.74f);
         }
-        else if (sourceIdx == 6) // BASS AMP (LOW END)
+        else if (sourceIdx == 6) // BASS AMP (LOW END — Ampeg 8x10 / 4x10 style)
         {
             active = true;
+            isBassCab = true;
+            const float tweeterCut = juce::jmap (offAx, 0.0f, 1.0f, 4200.0f, 2600.0f);
+
             for (int ch = 0; ch < 2; ++ch)
             {
-                hpf[ch].setHighPass (36.0f, 0.82f);
-                lpf[ch].setLowPass (3650.0f, 0.85f);
-                cabBox[ch].setLowShelf (105.0f, 3.4f + drv * 1.8f);
-                coneEdge[ch].setPeak (780.0f, 2.2f + drv * 1.6f, 1.25f);
-                harshBit[ch].setPeak (2100.0f, 1.2f + drv * 1.4f, 1.6f);
+                hpf[ch].setHighPass (34.0f, 0.85f);
+                boxRes[ch].setPeak (68.0f, 3.8f + cabDrive * 1.2f, 1.35f);   // Thump de gabinete grande
+                cabBody[ch].setPeak (760.0f, 2.8f + cabDrive * 1.6f, 1.35f); // Gruñido clásico de bajo
+                coneNotch1[ch].setPeak (360.0f, -2.6f, 2.1f);                // Limpieza de caja hueca
+                coneNotch2[ch].setPeak (1850.0f, -2.4f, 2.8f);
+                coneEdge[ch].setPeak (2450.0f, juce::jmap (offAx, 0.0f, 1.0f, 1.8f, -0.5f), 1.6f); // Tweeter sutil
+                lpf1[ch].setLowPass (tweeterCut, 0.82f);
+                lpf2[ch].setLowPass (tweeterCut * 1.12f, 0.72f);
             }
         }
     }
@@ -455,37 +493,49 @@ public:
         auto* L = buffer.getWritePointer (0);
         auto* R = buffer.getWritePointer (1);
 
+        auto processChannel = [&] (int ch, float x) noexcept -> float
+        {
+            const auto c = static_cast<size_t> (ch & 1);
+
+            // Excursión mecánica del cono (compresión suave ligada a la energía en graves)
+            exLowState[c] += exLowCoeff * (x - exLowState[c]);
+            const float absLow = std::abs (exLowState[c]);
+            const float coeff = (absLow > exEnv[c]) ? exAtkCoeff : exRelCoeff;
+            exEnv[c] += coeff * (absLow - exEnv[c]);
+            const float excursionComp = 1.0f / (1.0f + exEnv[c] * (isBassCab ? 0.85f : 0.60f));
+
+            // Saturación de bobina/cono PRE-SALA (antes de que el sonido viaje por el aire)
+            const float satDrive = 1.08f + cabDrive * (isBassCab ? 0.95f : 1.35f);
+            const float bias = (isBassCab ? 0.035f : 0.055f) * cabDrive;
+            float y = (std::tanh (x * satDrive + bias) - std::tanh (bias)) / (1.0f + cabDrive * 0.52f);
+            y *= excursionComp;
+
+            // Respuesta física del gabinete y cono de papel
+            y = hpf[c].processSample (ch, y);
+            y = boxRes[c].processSample (ch, y);
+            y = cabBody[c].processSample (ch, y);
+            y = coneNotch1[c].processSample (ch, y);
+            y = coneNotch2[c].processSample (ch, y);
+            y = coneEdge[c].processSample (ch, y);
+            y = lpf1[c].processSample (ch, y);
+            y = lpf2[c].processSample (ch, y);
+            return y;
+        };
+
         for (int i = 0; i < numSamples; ++i)
         {
-            const float lSample = L[i];
-            const float rSample = R[i];
-
             if (stereoSpreadAmount <= 0.001f)
             {
-                const float monoIn = 0.5f * (lSample + rSample);
-                float out = hpf[0].processSample (0, monoIn);
-                out = cabBox[0].processSample (0, out);
-                out = coneEdge[0].processSample (0, out);
-                out = harshBit[0].processSample (0, out);
-                out = lpf[0].processSample (0, out);
+                const float monoIn = 0.5f * (L[i] + R[i]);
+                const float out = processChannel (0, monoIn);
                 L[i] = out;
                 R[i] = out;
             }
             else
             {
-                float outL = hpf[0].processSample (0, lSample);
-                outL = cabBox[0].processSample (0, outL);
-                outL = coneEdge[0].processSample (0, outL);
-                outL = harshBit[0].processSample (0, outL);
-                outL = lpf[0].processSample (0, outL);
-
-                float outR = hpf[1].processSample (1, rSample);
-                outR = cabBox[1].processSample (1, outR);
-                outR = coneEdge[1].processSample (1, outR);
-                outR = harshBit[1].processSample (1, outR);
-                outR = lpf[1].processSample (1, outR);
-
-                const float mid = 0.5f * (outL + outR);
+                const float outL = processChannel (0, L[i]);
+                const float outR = processChannel (1, R[i]);
+                const float mid  = 0.5f * (outL + outR);
                 const float side = 0.5f * (outL - outR) * (1.0f + stereoSpreadAmount);
                 L[i] = mid + side;
                 R[i] = mid - side;
@@ -496,8 +546,13 @@ public:
 private:
     double sr = 44100.0;
     bool active = false;
+    bool isBassCab = false;
+    float cabDrive = 0.2f;
     float stereoSpreadAmount = 0.0f;
-    std::array<StereoBiquad, 2> hpf, lpf, cabBox, coneEdge, harshBit;
+    float exAtkCoeff = 0.005f, exRelCoeff = 0.0003f, exLowCoeff = 0.02f;
+    std::array<float, 2> exLowState { 0.0f, 0.0f };
+    std::array<float, 2> exEnv      { 0.0f, 0.0f };
+    std::array<StereoBiquad, 2> hpf, lpf1, lpf2, boxRes, cabBody, coneNotch1, coneNotch2, coneEdge;
 };
 
 //==============================================================================
@@ -854,14 +909,13 @@ public:
         mainComp4x.configure (compType, thresholdDb, useScFilter, linkStereo, true);
         parallelComp4x.configure (3, -24.0f, true, true, true);
 
-        // En 1x (Tracking) desactivamos grit agresivo para evitar aliasing con latencia 0
         mainComp1x.configure (compType, thresholdDb, useScFilter, linkStereo, false);
         parallelComp1x.configure (3, -24.0f, true, true, false);
     }
 
     struct ChainSettings
     {
-        bool hqOversampling = true; // true = MIXING (4x HQ), false = TRACKING (0ms)
+        bool hqOversampling = true;
         int routingOrder = 0;
         bool eqOn = true;
         bool compOn = true;

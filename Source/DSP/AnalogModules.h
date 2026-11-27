@@ -299,7 +299,7 @@ public:
 
         float y = x;
 
-        if (circuit == 0) // NEVE CLASS-A (cálido y sedoso, sin saturación dura temprana)
+        if (circuit == 0) // NEVE CLASS-A
         {
             const float pre = 1.0f + d * 1.55f;
             const float xFed = (x + lows * (0.20f * d) + coreFlux * (0.18f * d) + hystDiff * (0.06f * d)) * pre;
@@ -308,7 +308,7 @@ public:
             const float ironLoss = shaped - highs * (0.08f * d);
             y = ironLoss / (1.0f + d * 1.48f);
         }
-        else if (circuit == 1) // PULTEC 12AX7 (válvula dulce con sag controlado)
+        else if (circuit == 1) // PULTEC 12AX7
         {
             const float sag = 1.0f / (1.0f + sagEnv[c] * 0.35f * d);
             const float pre = (1.0f + d * 1.45f) * sag;
@@ -323,7 +323,7 @@ public:
 
             y = (shaped + cathodeShift * 0.30f + highs * (0.06f * d)) / (1.0f + d * 1.32f);
         }
-        else if (circuit == 2) // API 2520 (pegada en medios con headroom)
+        else if (circuit == 2) // API 2520
         {
             const float pre = 1.0f + d * 1.65f;
             const float maxSlew = juce::jmap (d, 0.0f, 1.0f, 1.10f, 0.38f);
@@ -334,7 +334,7 @@ public:
             const float shaped = xFed / std::sqrt (1.0f + 0.65f * xFed * xFed);
             y = (shaped + lows * (0.08f * d)) / (1.0f + d * 1.52f);
         }
-        else // SSL CLEAN (ultra limpio, color mínimo)
+        else // SSL CLEAN
         {
             const float pre = 1.0f + d * 0.85f;
             const float xIn = (x + hystDiff * (0.04f * d)) * pre;
@@ -364,8 +364,7 @@ private:
 };
 
 //==============================================================================
-// Modelado Físico de Gabinetes (Resonancia de Caja, Notches de Cono, Beaming
-// Off-Axis, Excursión Mecánica y Breakup Pre-Sala)
+// Modelado Físico de Gabinetes (Blindado contra clicks/clipping en Bass Amp)
 //==============================================================================
 class CabinetVoicingStage
 {
@@ -374,9 +373,10 @@ public:
     {
         sr = sampleRate > 0.0 ? sampleRate : 44100.0;
         const float fs = static_cast<float> (sr);
-        exAtkCoeff = 1.0f - std::exp (-1.0f / (0.003f * fs));
-        exRelCoeff = 1.0f - std::exp (-1.0f / (0.065f * fs));
-        exLowCoeff = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 160.0f / fs);
+        exAtkCoeffGtr  = 1.0f - std::exp (-1.0f / (0.003f * fs)); // 3 ms para guitarra
+        exAtkCoeffBass = 1.0f - std::exp (-1.0f / (0.014f * fs)); // 14 ms para bajo/808 (cero clicks)
+        exRelCoeff     = 1.0f - std::exp (-1.0f / (0.065f * fs));
+        exLowCoeff     = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 160.0f / fs);
 
         for (int ch = 0; ch < 2; ++ch)
         {
@@ -489,6 +489,7 @@ public:
         const int numSamples = buffer.getNumSamples();
         auto* L = buffer.getWritePointer (0);
         auto* R = buffer.getWritePointer (1);
+        const float atkCoeff = isBassCab ? exAtkCoeffBass : exAtkCoeffGtr;
 
         auto processChannel = [&] (int ch, float x) noexcept -> float
         {
@@ -496,7 +497,7 @@ public:
 
             exLowState[c] += exLowCoeff * (x - exLowState[c]);
             const float absLow = std::abs (exLowState[c]);
-            const float coeff = (absLow > exEnv[c]) ? exAtkCoeff : exRelCoeff;
+            const float coeff = (absLow > exEnv[c]) ? atkCoeff : exRelCoeff;
             exEnv[c] += coeff * (absLow - exEnv[c]);
             const float excursionComp = 1.0f / (1.0f + exEnv[c] * (isBassCab ? 0.85f : 0.60f));
 
@@ -513,6 +514,14 @@ public:
             y = coneEdge[c].processSample (ch, y);
             y = lpf1[c].processSample (ch, y);
             y = lpf2[c].processSample (ch, y);
+
+            // Blindaje post-caja en Bass Amp: compensación de headroom + techo suave
+            if (isBassCab)
+            {
+                y *= 0.72f;
+                y = std::tanh (y * 0.92f) / 0.92f;
+            }
+
             return y;
         };
 
@@ -543,7 +552,7 @@ private:
     bool isBassCab = false;
     float cabDrive = 0.2f;
     float stereoSpreadAmount = 0.0f;
-    float exAtkCoeff = 0.005f, exRelCoeff = 0.0003f, exLowCoeff = 0.02f;
+    float exAtkCoeffGtr = 0.005f, exAtkCoeffBass = 0.0016f, exRelCoeff = 0.0003f, exLowCoeff = 0.02f;
     std::array<float, 2> exLowState { 0.0f, 0.0f };
     std::array<float, 2> exEnv      { 0.0f, 0.0f };
     std::array<StereoBiquad, 2> hpf, lpf1, lpf2, boxRes, cabBody, coneNotch1, coneNotch2, coneEdge;

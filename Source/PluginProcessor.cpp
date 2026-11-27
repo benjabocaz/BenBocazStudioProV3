@@ -297,7 +297,7 @@ void BenBocazStudioProProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         cfg.deMudOn           = false;
         cfg.soloStandIdx      = soloStandIndex.load();
         cfg.pairSpread        = apvts.getRawParameterValue ("pairSpread")->load();
-        cfg.deccaWidth        = apvts.getRawParameterValue ("deccaWidth")->load();
+        cfg.roomAirTail       = apvts.getRawParameterValue ("roomAirTail")->load();
         cfg.roomParallelCrush = parOn && (parRoute == 1);
         cfg.roomParallelAmt   = parAmt;
 

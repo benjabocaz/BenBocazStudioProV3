@@ -9,6 +9,35 @@
 #include <atomic>
 
 //==============================================================================
+// Filtro All-Pass de 1er Orden (Decorrelación de fase transparente para Phase Safe)
+//==============================================================================
+class FirstOrderAllPass
+{
+public:
+    void prepare (double sampleRate, float freqHz)
+    {
+        const double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
+        const float f = std::clamp (freqHz, 40.0f, static_cast<float> (sr * 0.42));
+        const float t = std::tan (juce::MathConstants<float>::pi * f / static_cast<float> (sr));
+        coeff = (t - 1.0f) / (t + 1.0f);
+        reset();
+    }
+
+    void reset() { z1 = 0.0f; }
+
+    inline float processSample (float x) noexcept
+    {
+        const float y = coeff * x + z1;
+        z1 = x - coeff * y;
+        return y;
+    }
+
+private:
+    float coeff = 0.0f;
+    float z1 = 0.0f;
+};
+
+//==============================================================================
 // Difusor All-Pass Estéreo de 4 Etapas (elimina grano metálico en transitorios)
 //==============================================================================
 class StereoAllPassDiffuser
@@ -114,7 +143,6 @@ public:
         damp = std::clamp (dampingAmount, 0.05f, 0.88f);
         modDepthSamples = modDepthMs * 0.001f * static_cast<float> (sr);
 
-        // Filtro pasa-altos suave dentro del lazo para que los sub-graves decaigan más rápido que los medios
         const float cutHz = std::clamp (lowDecayCutHz, 20.0f, 450.0f);
         hpCoeff = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * cutHz / static_cast<float> (sr));
 
@@ -149,10 +177,8 @@ public:
             const size_t idx1 = (idx0 - 1) & mask;
             const float sample = lines[i][idx0] * (1.0f - frac) + lines[i][idx1] * frac;
 
-            // Amortiguación de agudos (aire/paredes)
             lpState[i] = sample * (1.0f - damp) + lpState[i] * damp;
 
-            // Control de decaimiento en graves (evita bola de barro en colas largas)
             hpState[i] += hpCoeff * (lpState[i] - hpState[i]);
             const float shaped = lpState[i] - hpState[i] * 0.32f;
 
@@ -242,9 +268,15 @@ public:
         roomAmbComp.prepare (sr);
         chamberAmbComp.prepare (sr);
 
-        midPhaseHpf.prepare (sr);   midPhaseHpf.setHighPass (115.0f, 0.7071f);
-        airPhaseHpf.prepare (sr);   airPhaseHpf.setHighPass (155.0f, 0.7071f);
-        deccaPhaseHpf.prepare (sr); deccaPhaseHpf.setHighPass (155.0f, 0.7071f);
+        // Decorreladores All-Pass sutiles (frecuencias escalonadas para compatibilidad mono)
+        pairDecorL.prepare (sr, 520.0f);
+        pairDecorR.prepare (sr, 790.0f);
+        farLDecor.prepare  (sr, 640.0f);
+        farRDecor.prepare  (sr, 970.0f);
+
+        midPhaseHpf.prepare (sr);   midPhaseHpf.setHighPass (120.0f, 0.7071f);
+        airPhaseHpf.prepare (sr);   airPhaseHpf.setHighPass (160.0f, 0.7071f);
+        deccaPhaseHpf.prepare (sr); deccaPhaseHpf.setHighPass (160.0f, 0.7071f);
         mainProxShelf.prepare (sr);
 
         roomLowShelf.prepare (sr);
@@ -255,7 +287,6 @@ public:
         deMudHpf.prepare (sr);      deMudHpf.setHighPass (165.0f, 0.7071f);
         deMudDip.prepare (sr);      deMudDip.setPeak (275.0f, -4.5f, 1.1f);
 
-        // Cadena de Parlante -> Bóveda -> Micrófono para las Echo Chambers
         chamberInHpf.prepare (sr);
         chamberInLpf.prepare (sr);
         chamberVoicePeak.prepare (sr);
@@ -277,6 +308,7 @@ public:
         smLowDb = smMidDb = smHighDb = 0.0f;
         lastProxDb = -99.0f;
         lastChamberIdx = -1;
+        lastPhaseSrcIdx = -1;
     }
 
     void reset()
@@ -285,6 +317,7 @@ public:
         std::fill (erBufR.begin(), erBufR.end(), 0.0f);
         erWritePos = 0;
         smoothInitialized = false;
+        pairDecorL.reset(); pairDecorR.reset(); farLDecor.reset(); farRDecor.reset();
         roomDiffuser.reset(); chamberDiffuser.reset();
         roomFdn.reset(); chamberFdn.reset();
         roomAmbComp.reset(); chamberAmbComp.reset();
@@ -318,6 +351,26 @@ public:
     void processMultiMicRoom (juce::AudioBuffer<float>& buffer, const MultiMicRoomConfig& cfg)
     {
         if (buffer.getNumChannels() < 2) return;
+
+        // HPF adaptativo de protección de fase según el instrumento seleccionado
+        if (cfg.sourceIdx != lastPhaseSrcIdx)
+        {
+            float pairCut = 120.0f, farCut = 160.0f;
+            switch (std::clamp (cfg.sourceIdx, 0, 6))
+            {
+                case 0: pairCut = 155.0f; farCut = 210.0f; break; // Vocals
+                case 1: pairCut = 95.0f;  farCut = 130.0f; break; // Drums
+                case 2: pairCut = 110.0f; farCut = 145.0f; break; // Ensemble
+                case 3: pairCut = 110.0f; farCut = 150.0f; break; // Monitors
+                case 4:
+                case 5: pairCut = 125.0f; farCut = 170.0f; break; // Guitar Mono / Stereo
+                case 6: pairCut = 165.0f; farCut = 220.0f; break; // Bass Amp
+            }
+            midPhaseHpf.setHighPass (pairCut, 0.7071f);
+            airPhaseHpf.setHighPass (farCut, 0.7071f);
+            deccaPhaseHpf.setHighPass (farCut, 0.7071f);
+            lastPhaseSrcIdx = cfg.sourceIdx;
+        }
 
         static constexpr std::array<float, 8> studioADelays { 29.3f, 37.1f, 43.7f, 53.3f, 61.9f, 71.1f, 83.3f, 97.7f };
         static constexpr std::array<float, 8> studioBDelays { 17.3f, 21.1f, 26.9f, 31.7f, 37.9f, 43.1f, 51.3f, 59.7f };
@@ -369,7 +422,6 @@ public:
             }
         }
 
-        // RT60, damping de agudos, caída de graves y difusión modulados por Live Wood vs Tight/Damped
         float baseRt60 = 1.85f, damp = 0.35f, lfCutHz = 110.0f;
         if (rIdx == 0)
         {
@@ -393,16 +445,12 @@ public:
         const auto& activeDelays = (rIdx == 0) ? studioADelays : ((rIdx == 1) ? studioBDelays : volcanoDelays);
         roomFdn.setProfile (activeDelays, baseRt60, damp, wLive ? 0.48f : 0.18f, lfCutHz);
 
-        // Difusión antes del FDN: más densa y abierta en Live Wood, más directa en Tight
         const float roomDiffAmt = wLive ? (rIdx == 2 ? 0.54f : 0.46f) : 0.24f;
-
-        // Absorción de agudos en Early Reflections (las paredes Tight absorben el brillo del rebote)
         const float erDampCoeff = wLive ? 0.14f : 0.56f;
 
         if (cfg.roomParallelCrush)
             roomAmbComp.configure (3, -24.0f, true, true, false);
 
-        // Dimensiones físicas reales de la sala
         const float roomW = (rIdx == 0) ? 15.0f : ((rIdx == 1) ? 10.5f : 14.0f);
         const float roomD = (rIdx == 0) ? 12.5f : ((rIdx == 1) ? 8.5f  : 20.0f);
         const float roomH = (rIdx == 0) ? 4.8f  : ((rIdx == 1) ? 3.4f  : 6.2f);
@@ -420,7 +468,6 @@ public:
         std::array<float, 4> targetDirWeight {};
         std::array<float, 4> targetAmbWeight {};
 
-        // Centro espacial ponderado de los micrófonos activos para las Early Reflections geométricas
         float sumW = 0.0f, avgMx = 0.0f, avgMy = 0.0f;
 
         for (size_t s = 0; s < 4; ++s)
@@ -455,7 +502,6 @@ public:
         if (sumW > 0.001f) { avgMx /= sumW; avgMy /= sumW; }
         else               { avgMx = 0.0f;  avgMy = roomD * 0.25f; }
 
-        // Efecto de proximidad real en 1:MAIN cuando se acerca mucho a la fuente (< 1.4m)
         const float proxDb = juce::jmap (std::clamp (distMeters[0], 0.35f, 1.8f), 0.35f, 1.8f, 2.4f, 0.0f);
         if (std::abs (proxDb - lastProxDb) > 0.05f)
         {
@@ -463,7 +509,6 @@ public:
             lastProxDb = proxDb;
         }
 
-        // Cálculo geométrico (Image-Source Method) de los 6 rebotes tempranos según (avgMx, avgMy)
         const float fs = static_cast<float> (sr);
         const float dLeftWall  = std::hypot (roomW + avgMx, avgMy);
         const float dRightWall = std::hypot (roomW - avgMx, avgMy);
@@ -481,18 +526,27 @@ public:
             (dBackR     / speed) * fs
         };
 
-        const float mainDelaySamples = (distMeters[0] / speed) * fs;
-        targetDelay[0] = mainDelaySamples;
-
-        for (size_t s = 1; s < 4; ++s)
+        // True Time-Align cuando PHASE SAFE está ON; retardos físicos completos cuando está OFF (FREE DELAY)
+        const float mainPhysicalDelay = (distMeters[0] / speed) * fs;
+        if (cfg.phaseSafe)
         {
-            const float relDist = std::max (0.0f, distMeters[s] - distMeters[0]);
-            const float rawRelSec = relDist / speed;
-            const float relSec = cfg.phaseSafe ? (rawRelSec * 0.65f) : rawRelSec;
-            targetDelay[s] = mainDelaySamples + relSec * fs;
+            // En modo Reverb (0) alineamos a 0ms contra la señal Dry; en Re-Mic (1) alineamos todos a 1:MAIN
+            const float anchorDelay = (cfg.modeIdx == 0) ? 0.0f : mainPhysicalDelay;
+            targetDelay[0] = anchorDelay;
+            targetDelay[1] = anchorDelay;
+            targetDelay[2] = anchorDelay;
+            targetDelay[3] = anchorDelay;
+        }
+        else
+        {
+            targetDelay[0] = mainPhysicalDelay;
+            for (size_t s = 1; s < 4; ++s)
+                targetDelay[s] = (distMeters[s] / speed) * fs;
         }
 
-        const float targetFarOffset = juce::jmap (farW, 0.2f, 1.5f, 0.0005f, 0.0065f) * fs;
+        const float targetFarOffset = cfg.phaseSafe
+            ? 0.0f
+            : (juce::jmap (farW, 0.2f, 1.5f, 0.0005f, 0.0065f) * fs);
 
         if (! smoothInitialized)
         {
@@ -573,7 +627,6 @@ public:
             erBufL[erWritePos] = srcL;
             erBufR[erWritePos] = srcR;
 
-            // Early Reflections geométricas dinámicas con absorción de pared (Live vs Tight)
             float erL = (readFrac (erBufL, smErSamples[0]) * 0.44f
                        + readFrac (erBufR, smErSamples[1]) * 0.34f
                        + readFrac (erBufL, smErSamples[2]) * 0.28f
@@ -593,7 +646,6 @@ public:
             erL = erDampLpL;
             erR = erDampLpR;
 
-            // Difusión suave antes del FDN para eliminar grano metálico en transitorios
             float fdnInL = srcL + erL * 0.38f;
             float fdnInR = srcR + erR * 0.38f;
             roomDiffuser.processStereo (fdnInL, fdnInR, roomDiffAmt);
@@ -604,7 +656,7 @@ public:
             float mainL = 0.0f, mainR = 0.0f;
             float ambL  = 0.0f, ambR  = 0.0f;
 
-            // ATRIL 1: MAIN (con efecto de proximidad y absorción de aire)
+            // ATRIL 1: MAIN
             if (smGain[0] > 0.0005f)
             {
                 const float g = smGain[0] * smDirWeight[0];
@@ -648,8 +700,8 @@ public:
 
                 if (cfg.phaseSafe)
                 {
-                    mL = midPhaseHpf.processSample (0, mL);
-                    mR = midPhaseHpf.processSample (1, mR);
+                    mL = pairDecorL.processSample (midPhaseHpf.processSample (0, mL));
+                    mR = pairDecorR.processSample (midPhaseHpf.processSample (1, mR));
                 }
 
                 const float mid  = 0.5f * (mL + mR);
@@ -668,7 +720,7 @@ public:
                 float capsuleL = dirMonoL * 0.22f + (erL * 0.76f + fdnL * 0.96f) * ambW;
 
                 if (cfg.phaseSafe)
-                    capsuleL = airPhaseHpf.processSample (0, capsuleL);
+                    capsuleL = farLDecor.processSample (airPhaseHpf.processSample (0, capsuleL));
 
                 ambL += capsuleL * smPanL[2] * g;
                 ambR += capsuleL * smPanR[2] * g;
@@ -684,7 +736,7 @@ public:
                 float capsuleR = dirMonoR * 0.22f + (erR * 0.76f + fdnR * 0.96f) * ambW;
 
                 if (cfg.phaseSafe)
-                    capsuleR = deccaPhaseHpf.processSample (1, capsuleR);
+                    capsuleR = farRDecor.processSample (deccaPhaseHpf.processSample (1, capsuleR));
 
                 ambL += capsuleR * smPanL[3] * g;
                 ambR += capsuleR * smPanR[3] * g;
@@ -760,7 +812,6 @@ public:
         {
             const int cIdx = (chamberIdx == 4) ? 1 : std::clamp (chamberIdx, 0, 3);
 
-            // Cadena real de Parlante Vintage -> Bóveda -> Micrófono según cada Chamber
             if (cIdx != lastChamberIdx)
             {
                 if (cIdx == 0) // Chamber 1 (Bright / Abbey Road Trick)
@@ -811,13 +862,11 @@ public:
             auto* chR = scratchBuffer.getWritePointer (1);
             for (int i = 0; i < numSamples; ++i)
             {
-                // Etapa de parlante vintage (voicing + micro-saturación suave)
                 float inL = chamberVoicePeak.processSample (0, chamberInLpf.processSample (0, chamberInHpf.processSample (0, chL[i])));
                 float inR = chamberVoicePeak.processSample (1, chamberInLpf.processSample (1, chamberInHpf.processSample (1, chR[i])));
                 inL = std::tanh (inL * 1.12f) * 0.90f;
                 inR = std::tanh (inR * 1.12f) * 0.90f;
 
-                // Difusor All-Pass de 4 etapas antes de entrar al FDN
                 chamberDiffuser.processStereo (inL, inR, chamberDiff[idx]);
 
                 float outL = 0.0f, outR = 0.0f;
@@ -877,6 +926,7 @@ private:
     float smLowDb = 0.0f, smMidDb = 0.0f, smHighDb = 0.0f;
     float lastProxDb = -99.0f;
     int lastChamberIdx = -1;
+    int lastPhaseSrcIdx = -1;
 
     float smoothCoeff = 0.001f;
     bool smoothInitialized = false;
@@ -885,6 +935,7 @@ private:
     std::array<float, 6> smErSamples {};
     float smDeccaOffset = 0.0f;
 
+    FirstOrderAllPass pairDecorL, pairDecorR, farLDecor, farRDecor;
     StereoAllPassDiffuser roomDiffuser, chamberDiffuser;
     StereoBiquad midPhaseHpf, airPhaseHpf, deccaPhaseHpf, mainProxShelf;
     StereoBiquad roomLowShelf, roomMidPeak, roomHighShelf;

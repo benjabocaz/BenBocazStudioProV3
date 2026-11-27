@@ -1,106 +1,42 @@
 #pragma once
-#include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "PluginProcessor.h"
 #include <array>
+#include <memory>
 
-class RusticStudioLookAndFeel : public juce::LookAndFeel_V4
+//==============================================================================
+// Escenario Interactivo de la Sala (4 Atriles Arrastrables en X e Y)
+//==============================================================================
+class StudioStageComponent : public juce::Component, private juce::Timer
 {
 public:
-    RusticStudioLookAndFeel();
+    explicit StudioStageComponent (BenBocazStudioProProcessor& p);
+    ~StudioStageComponent() override = default;
 
-    void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
-                         float sliderPos, float rotaryStartAngle, float rotaryEndAngle,
-                         juce::Slider& slider) override;
-
-    void drawComboBox (juce::Graphics& g, int width, int height, bool isButtonDown,
-                       int buttonX, int buttonY, int buttonW, int buttonH,
-                       juce::ComboBox& box) override;
-
-    void drawButtonBackground (juce::Graphics& g, juce::Button& button,
-                             const juce::Colour& backgroundColour,
-                             bool isHighlighted, bool isDown) override;
-
-    void drawToggleButton (juce::Graphics& g, juce::ToggleButton& button,
-                           bool isHighlighted, bool isDown) override;
-};
-
-class AnalogVuMeter : public juce::Component, private juce::Timer
-{
-public:
-    explicit AnalogVuMeter (BenBocazStudioProProcessor& proc);
-    void setShowGainReduction (bool gr) { showGR = gr; repaint(); }
-    bool isShowingGainReduction() const { return showGR; }
+    void setLinkFarStands (bool shouldLink) { linkFar = shouldLink; }
 
     void paint (juce::Graphics& g) override;
-
-private:
-    void timerCallback() override;
-    BenBocazStudioProProcessor& processor;
-    float smoothedNeedle = 0.0f;
-    bool showGR = false;
-};
-
-class Studio4MicStagePad : public juce::Component, private juce::Timer
-{
-public:
-    explicit Studio4MicStagePad (BenBocazStudioProProcessor& proc);
-
-    void setShangriLaImage (const juce::Image& img) { shangriLaImg = img; repaint(); }
-    void setCanyonImage (const juce::Image& img)    { canyonImg = img; repaint(); }
-    void setVolcanoOpenImage (const juce::Image& img)   { volcanoOpenImg = img; repaint(); }
-    void setVolcanoClosedImage (const juce::Image& img) { volcanoClosedImg = img; repaint(); }
-    void setSourceImage (int idx, const juce::Image& img);
-    void setMicImage (int idx, const juce::Image& img);
-    void setFarMicImage (int idx, const juce::Image& img);
-
-    void setSnapToCenter (bool snap) { snapToCenter = snap; }
-    void setLinkAirDecca (bool link) { linkAirDecca = link; repaint(); }
-    bool isAirDeccaLinked() const { return linkAirDecca; }
-    void setShowTipsOverlay (bool show) { showTipsOverlay = show; repaint(); }
-    void setSelectedStand (int idx);
-    int getSelectedStand() const { return selectedStand; }
-    void centerStand (int idx);
-
-    std::function<void (int)> onSelectedStandChanged;
-
-    void paint (juce::Graphics& g) override;
-    void mouseMove (const juce::MouseEvent& e) override;
-    void mouseExit (const juce::MouseEvent& e) override;
     void mouseDown (const juce::MouseEvent& e) override;
-    void mouseDoubleClick (const juce::MouseEvent& e) override;
     void mouseDrag (const juce::MouseEvent& e) override;
-    void mouseUp (const juce::MouseEvent& e) override;
+    void mouseUp (const juce::MouseEvent&) override;
 
 private:
     void timerCallback() override { repaint(); }
-    juce::Point<float> getStandBasePos (int idx, juce::Rectangle<float> area) const;
-    float getStandScale (int idx) const;
-    float getStandVisualHeight (int idx, float scale) const;
-    juce::Rectangle<float> getStandTagRect (int idx, juce::Rectangle<float> area) const;
-    int findTargetStand (juce::Point<float> pt, juce::Rectangle<float> area, float& outMinDist, bool preferSelected) const;
-    void updateStandFromBasePoint (int idx, juce::Point<float> targetBase, juce::Rectangle<float> area);
-    void drawAmpFallback (juce::Graphics& g, float cx, float floorY, int sourceIdx, float scale, float alpha) const;
-    void drawTipsOverlay (juce::Graphics& g, juce::Rectangle<float> area, int sourceIdx) const;
+
+    juce::Rectangle<float> getStageArea() const;
+    juce::Point<float> normToScreen (float x, float y) const;
+    void screenToNorm (juce::Point<float> pt, float& outX, float& outY) const;
+    void setParamNorm (const juce::String& id, float value);
 
     BenBocazStudioProProcessor& processor;
-    juce::AudioProcessorValueTreeState& apvts;
-
-    juce::Image shangriLaImg, canyonImg, volcanoOpenImg, volcanoClosedImg;
-    std::array<juce::Image, 7> sourceImgs;
-    std::array<juce::Image, 4> micImgs;
-    std::array<juce::Image, 2> farMicImgs;
-
-    bool snapToCenter = true;
-    bool linkAirDecca = true;
-    bool showTipsOverlay = false;
-    bool isDragging = false;
-    int selectedStand = 0;
-    int hoveredStand = -1;
-    juce::Point<float> dragOffset { 0.0f, 0.0f };
+    int draggingStand = -1;
+    bool linkFar = true;
 };
 
-class BenBocazStudioProEditor : public juce::AudioProcessorEditor
+//==============================================================================
+// Editor Principal de Ben Bocaz Studio Pro
+//==============================================================================
+class BenBocazStudioProEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     explicit BenBocazStudioProEditor (BenBocazStudioProProcessor&);
@@ -110,85 +46,82 @@ public:
     void resized() override;
 
 private:
-    void loadEmbeddedImages();
-    void openIRFileChooser();
-    void applyFactoryPreset (int idx);
-    void updateSoloButtonsUI();
-    void updateSelectedStandButtonsUI (int selIdx);
-    void updateHqModeButtonText();
-    void setupKnob (juce::Slider& slider, juce::Label& label, const juce::String& text);
-    void setupStandKnob (juce::Slider& slider, juce::TextButton& selectBtn, const juce::String& text, int standIdx);
-    void setupCombo (juce::ComboBox& box, const juce::StringArray& items, juce::Label& label, const juce::String& text);
+    void timerCallback() override;
+    void setupKnob (juce::Slider& s, juce::Label& l, const juce::String& text, const juce::String& suffix = {});
+    void setupToggle (juce::ToggleButton& b, const juce::String& text);
+    void setupCombo (juce::ComboBox& c, const juce::StringArray& items);
+    void updateSoloButtons();
+    void applyPreset (int presetIndex);
+    void setParam (const juce::String& id, float rawValue);
 
-    BenBocazStudioProProcessor& audioProcessor;
-    RusticStudioLookAndFeel rusticLAF;
-    AnalogVuMeter vuMeter;
-    Studio4MicStagePad roomPad;
-
-    juce::Image chassisImage;
-    std::unique_ptr<juce::FileChooser> fileChooser;
-    bool stageExpanded = false;
-    bool syncingFarGains = false;
-
-    juce::Label presetLbl;
-    juce::ComboBox presetBox;
-    juce::ToggleButton snapCenterBtn { "SNAP CENTER" };
-    juce::ToggleButton link34Btn     { "LINK 3+4" };
-    juce::TextButton centerSelBtn   { "CENTER MIC" };
-    juce::ToggleButton hqModeBtn     { "MIXING 4x HQ" };
-    juce::TextButton tipsBtn        { "i TIPS" };
-    juce::TextButton expandStageBtn { "EXPAND STAGE" };
-
-    juce::TextButton solo1Btn { "S" }, solo2Btn { "S" }, solo3Btn { "S" }, solo4Btn { "S" };
-    juce::TextButton mic1SelBtn, mic2SelBtn, mic3SelBtn, mic4SelBtn;
-
-    juce::ToggleButton phaseAlignBtn { "PHASE SAFE" };
-    juce::ToggleButton phaseInvBtn   { "POLARITY INV" };
-    juce::ToggleButton vocalModBtn   { "VOCAL MIC MOD" };
-    juce::ToggleButton mainStereoBtn { "MAIN STEREO" };
-    juce::ToggleButton roomOnBtn     { "ROOM ON" };
-    juce::ToggleButton chamberOnBtn  { "ON" };
-    juce::ToggleButton eqOnBtn       { "EQ ON" };
-    juce::ToggleButton compOnBtn     { "COMP ON" };
-    juce::ToggleButton compScLinkBtn { "SC LINK" };
-    juce::ToggleButton compScFiltBtn { "SC FILTER" };
-    juce::ToggleButton parCompOnBtn  { "PAR CRUSH" };
-    juce::TextButton vuModeBtn       { "VU: OUT" };
-    juce::TextButton loadIRBtn       { "LOAD IR (.WAV)" };
-    juce::Label irNameLbl;
-
-    juce::ComboBox modeBox, chainBox, vocalSrcBox, vocalTgtBox, sourceBox, monitorBox, roomBox, wallsBox, eqTubeBox, chamberBox;
-    juce::ComboBox eqTypeBox, eqLowFreqBox, eqMidFreqBox, eqHighFreqBox, compBox, parRouteBox;
-    juce::Label modeLbl, chainLbl, vocalSrcLbl, vocalTgtLbl, sourceLbl, monitorLbl, roomLbl, wallsLbl, eqTubeLbl, chamberLbl;
-    juce::Label eqTypeLbl, compLbl, parRouteLbl;
-
-    juce::Slider vocalInSlider, vocalOutSlider, driveSlider;
-    juce::Slider mic1GainSlider, mic2GainSlider, mic3GainSlider, mic4GainSlider;
-    juce::Slider pairWidthSlider, deccaWidthSlider;
-    juce::Slider chMixSlider, chDecaySlider, chPreSlider, chWidthSlider;
-    juce::Slider eqHpfSlider, eqLowSlider, eqMidSlider, eqHighSlider;
-    juce::Slider compThreshSlider, compMixSlider, parAmtSlider, outGainSlider;
-
-    juce::Label vocalInLbl, vocalOutLbl, driveLbl;
-    juce::Label pairWidthLbl, deccaWidthLbl;
-    juce::Label chMixLbl, chDecayLbl, chPreLbl, chWidthLbl;
-    juce::Label eqHpfLbl, eqLowLbl, eqMidLbl, eqHighLbl;
-    juce::Label compThreshLbl, compMixLbl, parAmtLbl, outGainLbl;
+    BenBocazStudioProProcessor& processor;
 
     using SliderAtt = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ComboAtt  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using ButtonAtt = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
-    std::unique_ptr<ButtonAtt> phaseAlignAtt, phaseInvAtt, hqModeAtt, vocalModAtt, mainStereoAtt, roomOnAtt, chamberOnAtt;
-    std::unique_ptr<ButtonAtt> eqOnAtt, compOnAtt, compScLinkAtt, compScFiltAtt, parCompOnAtt;
-    std::unique_ptr<ComboAtt>  modeAtt, chainAtt, vocalSrcAtt, vocalTgtAtt, sourceAtt, monitorAtt, roomAtt, wallsAtt, eqTubeAtt, chamberAtt;
-    std::unique_ptr<ComboAtt>  eqTypeAtt, eqLowFreqAtt, eqMidFreqAtt, eqHighFreqAtt, compAtt, parRouteAtt;
-    std::unique_ptr<SliderAtt> vocalInAtt, vocalOutAtt, driveAtt;
-    std::unique_ptr<SliderAtt> mic1GainAtt, mic2GainAtt, mic3GainAtt, mic4GainAtt;
-    std::unique_ptr<SliderAtt> pairWidthAtt, deccaWidthAtt;
-    std::unique_ptr<SliderAtt> chMixAtt, chDecayAtt, chPreAtt, chWidthAtt;
-    std::unique_ptr<SliderAtt> eqHpfAtt, eqLowAtt, eqMidAtt, eqHighAtt;
-    std::unique_ptr<SliderAtt> compThreshAtt, compMixAtt, parAmtAtt, outGainAtt;
+    // Barra superior
+    juce::ComboBox presetBox, modeBox, chainOrderBox;
+    juce::ToggleButton hqModeBtn, phaseAlignBtn, phaseInvertBtn;
+    std::unique_ptr<ComboAtt> modeAtt, chainOrderAtt;
+    std::unique_ptr<ButtonAtt> hqModeAtt, phaseAlignAtt, phaseInvertAtt;
+
+    // Vocal Mic Modeler
+    juce::ToggleButton vocalModOnBtn;
+    juce::ComboBox vocalSrcBox, vocalTgtBox;
+    juce::Slider vocalInSlider, vocalOutSlider;
+    juce::Label vocalInLbl, vocalOutLbl;
+    std::unique_ptr<ButtonAtt> vocalModOnAtt;
+    std::unique_ptr<ComboAtt> vocalSrcAtt, vocalTgtAtt;
+    std::unique_ptr<SliderAtt> vocalInAtt, vocalOutAtt;
+
+    // Escenario y Sala 3D
+    StudioStageComponent stageView;
+    juce::ToggleButton roomOnBtn, mainStereoBtn, linkFarBtn;
+    juce::ComboBox sourceBox, monitorBox, roomBox, wallsBox;
+    juce::Slider pairSpreadSlider, roomAirTailSlider;
+    juce::Label pairSpreadLbl, roomAirTailLbl;
+    std::unique_ptr<ButtonAtt> roomOnAtt, mainStereoAtt;
+    std::unique_ptr<ComboAtt> sourceAtt, monitorAtt, roomAtt, wallsAtt;
+    std::unique_ptr<SliderAtt> pairSpreadAtt, roomAirTailAtt;
+
+    std::array<juce::Slider, 4> micGainSliders;
+    std::array<juce::Label, 4> micGainLabels;
+    std::array<juce::TextButton, 4> micSoloBtns;
+    std::array<std::unique_ptr<SliderAtt>, 4> micGainAtts;
+
+    // Echo Chambers + Custom IR
+    juce::ToggleButton chamberOnBtn;
+    juce::ComboBox chamberTypeBox;
+    juce::TextButton loadIrBtn { "Load WAV IR" };
+    juce::Label irNameLbl;
+    juce::Slider chamberMixSlider, chamberDecaySlider, chamberPreSlider, chamberWidthSlider;
+    juce::Label chamberMixLbl, chamberDecayLbl, chamberPreLbl, chamberWidthLbl;
+    std::unique_ptr<ButtonAtt> chamberOnAtt;
+    std::unique_ptr<ComboAtt> chamberTypeAtt;
+    std::unique_ptr<SliderAtt> chamberMixAtt, chamberDecayAtt, chamberPreAtt, chamberWidthAtt;
+    std::unique_ptr<juce::FileChooser> irChooser;
+
+    // Consola: Preamp + EQ + Comp + Parallel + Output
+    juce::ComboBox tubeModelBox, eqTypeBox, eqLowFreqBox, eqMidFreqBox, eqHighFreqBox;
+    juce::ToggleButton eqOnBtn;
+    juce::Slider driveSlider, eqHpfSlider, eqLowSlider, eqMidSlider, eqHighSlider;
+    juce::Label driveLbl, eqHpfLbl, eqLowLbl, eqMidLbl, eqHighLbl;
+    std::unique_ptr<ComboAtt> tubeModelAtt, eqTypeAtt, eqLowFreqAtt, eqMidFreqAtt, eqHighFreqAtt;
+    std::unique_ptr<ButtonAtt> eqOnAtt;
+    std::unique_ptr<SliderAtt> driveAtt, eqHpfAtt, eqLowAtt, eqMidAtt, eqHighAtt;
+
+    juce::ToggleButton compOnBtn, compScLinkBtn, compScFilterBtn, parCompOnBtn;
+    juce::ComboBox compTypeBox, parCompRouteBox;
+    juce::Slider compThreshSlider, compMixSlider, parCompAmtSlider, outputGainSlider;
+    juce::Label compThreshLbl, compMixLbl, parCompAmtLbl, outputGainLbl;
+    std::unique_ptr<ButtonAtt> compOnAtt, compScLinkAtt, compScFilterAtt, parCompOnAtt;
+    std::unique_ptr<ComboAtt> compTypeAtt, parCompRouteAtt;
+    std::unique_ptr<SliderAtt> compThreshAtt, compMixAtt, parCompAmtAtt, outputGainAtt;
+
+    // Medidores
+    float displayVuDb = -60.0f;
+    float displayGrDb = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BenBocazStudioProEditor)
 };
